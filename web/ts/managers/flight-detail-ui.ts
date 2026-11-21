@@ -1,6 +1,6 @@
 /** DOM management for the Flight Detail page. */
 
-import type { ConditionTagId, DebriefResponse, FlightResponse, PackMeta } from '../store/types';
+import type { FlightResponse, PackMeta } from '../store/types';
 import type { WaypointInfo } from '../adapters/api-adapter';
 import { aircraftLabel, type AircraftResponse } from '../adapters/aircraft-adapter';
 import { applyCeilingWarning, parseCeilingInput } from '../utils/ceiling-warning';
@@ -10,7 +10,6 @@ import { getDateLocale, t } from '../i18n/i18n';
 import { buildTimezoneOptions, utcToLocal } from '../utils/timezone';
 import { splitDurationCeil, combineDuration, buildDurationHourOptions, buildDurationMinuteOptions, formatDurationHM } from '../utils/duration';
 import { maybeShowFlexibilityExplainer } from '../components/flexibility-explainer';
-import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefSummary } from '../components/debrief-summary';
 import { showRoutePopup } from '../components/route-interpret';
 
@@ -645,24 +644,15 @@ export function renderError(error: string | null): void {
 
 // --- Debrief section ---
 
-/** Render the debrief panel — banner / summary / editor — for a past flight.
- *
- * Hides the entire section for future or non-owned flights. The editor
- * mounts into ``#debrief-host`` on demand (clicking Add/Edit). After save
- * or delete, ``onChanged`` is invoked so the page can refetch.
- */
-export function renderDebriefSection(
-  flight: FlightResponse | null,
-  flaggedCategories: ConditionTagId[],
-  onChanged: () => void,
-): void {
+/** The flight page's debrief card (#1024): the stored decision, and a link
+ *  to the Debrief section on the briefing page, where the report, its
+ *  questions and the flown / cancelled tap live. Owner past flights only. */
+export function renderDebriefSection(flight: FlightResponse | null): void {
   const section = $('debrief-section');
   const banner = $('debrief-banner');
   const summary = $('debrief-summary');
-  const host = $('debrief-host') as HTMLElement | null;
-  if (!section || !banner || !summary || !host) return;
+  if (!section || !banner || !summary) return;
 
-  // Visibility rules: owner + past flight only.
   const isOwner = flight?.role === 'owner';
   const isPast = flight && isFlightPast(
     flight.target_date, flight.target_time_utc, flight.flight_duration_hours, flight.departure_time,
@@ -671,39 +661,16 @@ export function renderDebriefSection(
     section.style.display = 'none';
     return;
   }
-
   section.style.display = 'block';
-  host.dataset.flightId = flight.id;
 
-  const debrief = flight.debrief ?? null;
-  // #769: what the instruments saw along the flight lives on the briefing
-  // page (the recap, opened focused on "Along the route"). Where the form
-  // itself should live is the #769 review pass's call; it stays here.
-  const recapUrl = `/briefing.html?flight=${encodeURIComponent(flight.id)}&section=observed-ribbon`;
-  const recapLink = ` <a class="btn btn-secondary" href="${recapUrl}" data-testid="debrief-recap-link">${t('debrief.viewRecap')}</a>`;
-  if (debrief) {
-    banner.innerHTML = `<button type="button" class="btn btn-secondary" id="debrief-edit-btn">${t('debrief.editCta')}</button>${recapLink}`;
-    summary.innerHTML = renderDebriefSummary(debrief);
-  } else {
-    banner.innerHTML = `<button type="button" class="btn btn-primary" id="debrief-edit-btn">${t('debrief.addCta')}</button>${recapLink}`;
-    summary.innerHTML = '';
-  }
-
-  const openEditor = () => {
-    if (host.dataset.open === '1') {
-      host.dataset.open = '';
-      host.innerHTML = '';
-      return;
-    }
-    host.dataset.open = '1';
-    renderDebriefForm(host, {
-      existing: debrief,
-      flaggedCategories,
-      onSaved: () => { host.dataset.open = ''; host.innerHTML = ''; onChanged(); },
-      onDeleted: () => { host.dataset.open = ''; host.innerHTML = ''; onChanged(); },
-      onCancelled: () => { host.dataset.open = ''; host.innerHTML = ''; },
-    });
-  };
-  document.getElementById('debrief-edit-btn')?.addEventListener('click', openEditor);
+  const open = flight.questions_open ?? 0;
+  const count = open === 1
+    ? t('debriefSection.questionsOpenOne')
+    : t('debriefSection.questionsOpenMany', { n: open });
+  const url = `/briefing.html?flight=${encodeURIComponent(flight.id)}#debrief`;
+  banner.innerHTML = `<a class="btn ${open > 0 || !flight.debrief ? 'btn-primary' : 'btn-secondary'}" href="${url}"`
+    + ` data-testid="debrief-open-link">${escapeHtml(t('debriefSection.open'))}`
+    + `${open > 0 ? ` · ${escapeHtml(count)}` : ''}</a>`;
+  summary.innerHTML = flight.debrief ? renderDebriefSummary(flight.debrief) : '';
 }
 

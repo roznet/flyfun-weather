@@ -5,6 +5,8 @@ import { briefingStore, effectiveThemeId, type BriefingState } from './store/bri
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
 import { fetchPirepsByFlight } from './adapters/pirep-adapter';
+import { fetchDebriefReport } from './adapters/debrief-adapter';
+import { mountDebriefSection, type DebriefSectionHandle } from './components/debrief-section';
 import { renderPirepList } from './managers/pirep-ui';
 import { initDonateNudge } from './managers/donate-nudge-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
@@ -2600,7 +2602,43 @@ async function init(): Promise<void> {
     if (!windowStarted(s.flight)) return;
     const past = windowPast(s.flight, s.live);
     void s.loadTicks(past);
-    if (past) void s.loadRecap();
+    if (past) {
+      void s.loadRecap();
+      void loadDebriefSection();
+    }
+  }
+
+  // --- Debrief section (#1024) ------------------------------------------------
+  // After the window, the owner's report opens the Observed group: headline,
+  // flown / cancelled, the server's questions. Everything is the server's
+  // (`/debrief/report`); a save reloads the recap (a cancelled flight's recap
+  // reads the planned times).
+  let debriefSection: DebriefSectionHandle | null = null;
+  let debriefSectionFor: string | null = null;
+
+  async function loadDebriefSection(): Promise<void> {
+    const flight = store.getState().flight;
+    const wrapper = document.getElementById('debrief-report-wrapper');
+    const host = document.getElementById('debrief-report-section');
+    if (!flight || !wrapper || !host) return;
+    const isOwner = !!user && flight.user_id === user.id;
+    if (!isOwner || debriefSectionFor === flight.id) return;
+    debriefSectionFor = flight.id;
+    let report;
+    try {
+      report = await fetchDebriefReport(flight.id);
+    } catch (err) {
+      console.warn('Debrief report failed to load', err);
+      debriefSectionFor = null;
+      return;
+    }
+    debriefSection?.teardown();
+    wrapper.style.display = '';
+    debriefSection = mountDebriefSection(host, flight.id, { report, debrief: flight.debrief ?? null }, () => {
+      void store.getState().loadRecap();
+    });
+    // A push or the flight page's card links here with #debrief.
+    if (window.location.hash === '#debrief') wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   store.subscribe((state, prev) => {
