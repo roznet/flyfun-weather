@@ -40,7 +40,11 @@ from weatherbrief.fetch.variables import (
 from weatherbrief.models import AdvisorySummary, Flight, FlightDebrief
 from weatherbrief.notify.badge import unseen_flight_ids
 from weatherbrief.storage.aircraft import ensure_default_aircraft, resolve_flight_aircraft
-from weatherbrief.storage.debriefs import bulk_get_debriefs, get_debrief as _get_debrief
+from weatherbrief.storage.debriefs import (
+    bulk_get_debriefs,
+    bulk_report_flags,
+    get_debrief as _get_debrief,
+)
 from weatherbrief.api.debriefs import DebriefResponse
 from weatherbrief.api.flight_search import MAX_QUERY_LEN, matches as _search_matches, parse_query
 from weatherbrief.api.preferences import load_flight_order
@@ -254,6 +258,11 @@ class FlightResponse(BaseModel):
     owner_display_name: str | None = None  # set when role == "subscriber"
     is_subscribed: bool = False  # True when the viewer has subscribed to this flight
     debrief: DebriefResponse | None = None  # owned past flights only
+    # #1023: the debrief report was built at window close (owner only), and
+    # how many of its questions are still unanswered. Flags only: the report
+    # itself is GET /flights/{id}/debrief/report.
+    debrief_ready: bool = False
+    questions_open: int = 0
     section: Literal["future", "recent", "past"] = "past"
     # Original Field-15 input the pilot typed, when captured (web Save flow).
     # Surfaced so the flight detail UI can show "Original: <raw string>" —
@@ -525,6 +534,7 @@ def _flight_to_response(
     section: Literal["future", "recent", "past"] | None = None,
     unseen: bool = False,
     trip: "TripLegRef | None" = None,
+    report_flags: dict | None = None,
 ) -> FlightResponse:
     # viewer_id is required: the role derivation below compares flight.user_id
     # against it, and with viewer_id=None we would silently classify the
@@ -557,6 +567,9 @@ def _flight_to_response(
     if debrief is None and effective_role == "owner":
         debrief = _get_debrief(db, flight.id)
     debrief_resp = DebriefResponse.from_model(debrief) if debrief else None
+    if report_flags is None and effective_role == "owner":
+        report_flags = bulk_report_flags(db, [flight.id]).get(flight.id)
+    report_flags = report_flags or {}
 
     if section is None:
         section = _classify_section(
@@ -610,6 +623,8 @@ def _flight_to_response(
         owner_display_name=owner_display_name,
         is_subscribed=subscribed,
         debrief=debrief_resp,
+        debrief_ready=bool(report_flags.get("debrief_ready")),
+        questions_open=int(report_flags.get("questions_open") or 0),
         raw_route=flight.raw_route,
         parser_version=flight.parser_version,
         share_code=flight.share_code,
@@ -806,6 +821,9 @@ def list_all_flights(
     paired = list_flights_with_role(db, user_id)
     pack_status = _get_latest_packs(db, [f.id for f, _, _ in paired])
     debrief_map = _bulk_debriefs_for_owned(db, paired, user_id)
+    report_flag_map = bulk_report_flags(
+        db, [f.id for f, role, _ in paired if role == "owner" and f.user_id == user_id],
+    )
     # Flights with an unopened notify-qualifying update — drives the flight-list
     # red dot, kept consistent with the app-icon badge. One cheap query.
     unseen_ids = unseen_flight_ids(db, user_id)
@@ -851,6 +869,7 @@ def list_all_flights(
             trip=(
                 trip_refs.get(f.id) if role == "owner" else shared_refs.get(f.id)
             ),
+            report_flags=report_flag_map.get(f.id, {}) if role == "owner" else {},
         )
         if section == "past":
             past.append(resp)

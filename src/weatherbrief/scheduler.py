@@ -982,6 +982,15 @@ def _run_verification_once(app_state) -> None:
             except Exception:
                 db.rollback()
                 logger.error("Live tick failed", exc_info=True)
+            # After the tick, so a landing it just committed closes the
+            # window on this cycle (#1023).
+            try:
+                from weatherbrief.tasks.debrief_close import run_debrief_close
+
+                run_debrief_close(db)
+            except Exception:
+                db.rollback()
+                logger.error("Debrief close failed", exc_info=True)
     finally:
         db.close()
 

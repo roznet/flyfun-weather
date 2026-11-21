@@ -789,6 +789,19 @@ def send_live_alert_push(
     )
 
 
+def send_debrief_push(db: Session, user_id: str, payload: dict) -> int:
+    """Send the post-flight debrief push (#1023) to all the user's devices.
+
+    Built by ``tasks/debrief_close.py``, once per flight at window close;
+    ``type: "debrief"`` opens the flight's Debrief section. Best-effort;
+    returns the number of devices reached.
+    """
+    devices = _load_devices(db, user_id)
+    if not devices:
+        return 0
+    return _dispatch(db, devices, payload, push_type="alert", priority=10, user_id=user_id)
+
+
 def send_flight_day_push(
     db: Session,
     user_id: str,

@@ -164,6 +164,16 @@ class WeatherbriefClient:
                 return None
             raise
 
+    def get_debrief_summary(self, flight_id: str) -> dict | None:
+        """The debrief headline and open questions (#1023), or None before
+        window close (or for a flight the caller does not own)."""
+        try:
+            return self._get(f"/flights/{flight_id}/debrief/summary").get("debrief")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
     def get_digest_json(self, flight_id: str, timestamp: str) -> dict | None:
         try:
             return self._get(f"/flights/{flight_id}/packs/{timestamp}/digest/json")
