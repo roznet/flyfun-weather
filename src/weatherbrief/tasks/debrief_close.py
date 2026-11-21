@@ -19,9 +19,11 @@ build, so each flight is handled at most once and gets at most one push.
 - the bell is not muted (the flight's, else its trip's), ``notify_push`` is
   on and the user has a device.
 
-``WB_DEBRIEF_PUSH=1`` turns the send on; unset, every decision is logged
+``WB_DEBRIEF_PUSH=1`` turns the send on (the row reads ``pending`` until the
+send returns ``sent`` or ``failed``); unset, every decision is logged
 (``DEBRIEF_PUSH_WOULD_SEND`` / ``DEBRIEF_PUSH_SKIPPED``) and stored as
-``shadow``. It stays off until the Debrief section (#1024) is on both stores,
+``shadow``. A flight whose build raises gets no row and is retried each
+cycle until it leaves :data:`LOOKBACK`, logged at error level. It stays off until the Debrief section (#1024) is on both stores,
 so the push lands somewhere.
 
 :data:`LOOKBACK` bounds the first run after a deploy: flights that closed
@@ -178,7 +180,9 @@ def close_flight(db: Session, flight: FlightRow, progress, now: datetime) -> Fli
         reasons_json=json.dumps(interest.get("reasons") or []),
         questions_json=json.dumps([{"id": q["id"], "kind": q["kind"], "text": q["text"]} for q in questions]),
         push_reason=(body or "")[:300] or None,
-        push_outcome=f"skipped:{reason}" if reason else "shadow",
+        # ``pending`` until the send returns: a process that dies in between
+        # leaves ``pending``, never a ``shadow`` it did not decide.
+        push_outcome=f"skipped:{reason}" if reason else ("pending" if push_enabled() else "shadow"),
     )
     db.add(row)
     db.commit()
@@ -204,19 +208,23 @@ def run_debrief_close(db: Session, now: datetime | None = None) -> dict:
     """Handle every flight whose window just closed. Never raises per flight."""
     now = now or datetime.now(timezone.utc)
     flights = find_closed_flights(db, now)
-    built = pushed = 0
+    built = sent = shadow = 0
     for flight, progress in flights:
         try:
             row = close_flight(db, flight, progress, now)
             built += 1
-            pushed += row.push_outcome in ("sent", "shadow")
+            sent += row.push_outcome == "sent"
+            shadow += row.push_outcome == "shadow"
         except Exception:
             db.rollback()
-            logger.warning("Debrief close failed for flight %s", flight.id, exc_info=True)
+            # No row is stored, so the flight is tried again each cycle until
+            # it leaves LOOKBACK: an error, not a warning, so a deterministic
+            # failure stands out.
+            logger.error("Debrief close failed for flight %s", flight.id, exc_info=True)
     if flights:
-        logger.info("Debrief close: %d flight(s) closed, %d report(s) stored, %d push(es)%s",
-                    len(flights), built, pushed, "" if push_enabled() else " (shadow)")
-    return {"closed": len(flights), "built": built, "pushed": pushed}
+        logger.info("Debrief close: %d flight(s) closed, %d report(s) stored, %d push(es) sent, %d shadow",
+                    len(flights), built, sent, shadow)
+    return {"closed": len(flights), "built": built, "sent": sent, "shadow": shadow}
 
 
 def debrief_summary(db: Session, flight_id: str) -> dict | None:

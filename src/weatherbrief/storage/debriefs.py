@@ -207,10 +207,12 @@ def save_answers(
     *,
     rules_version: str,
     now: datetime | None = None,
-) -> FlightDebrief:
+) -> FlightDebrief | None:
     """Store (or, with answer None, clear) answers, then fold them into the
     flight's debrief: decision ``flown``, form ``questions``, outcomes
-    derived from every stored answer (:func:`outcomes_from_answers`).
+    derived from every stored answer (:func:`outcomes_from_answers`). When
+    no answer remains, a derived debrief without a note is removed (returns
+    None) rather than left as "flown, nothing to report".
 
     ``items``: (question as the report asks it, answer, avoided, note). The
     caller has validated each answer against its question. A debrief note
@@ -249,6 +251,19 @@ def save_answers(
                 setattr(row, k, v)
     db.flush()
     current = db.get(FlightDebriefRow, flight_id)
+    remaining = db.execute(
+        select(FlightDebriefAnswerRow.id).where(FlightDebriefAnswerRow.flight_id == flight_id).limit(1)
+    ).first()
+    if remaining is None:
+        # Every answer cleared: a derived "flown, nothing to report" would
+        # read as "all as forecast". Drop the derived debrief unless the
+        # pilot wrote a note on it; the flight is back to not debriefed.
+        if current is not None and current.form == FORM_QUESTIONS and not current.note:
+            db.delete(current)
+            db.flush()
+            return None
+        if current is None:
+            return None
     return upsert_debrief(
         db, flight_id=flight_id, decision=Decision.FLOWN,
         note=current.note if current is not None else None, form=FORM_QUESTIONS,

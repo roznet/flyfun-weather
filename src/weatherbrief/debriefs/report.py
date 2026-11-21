@@ -1007,9 +1007,6 @@ def build_report(recap: dict, *, lane: dict | None, manifest: dict | None, histo
 
     # A cancelled flight: nobody was there to answer.
     questions = [] if cancelled else build_questions(manifest, recap.get("segments") or [], flown, progress, locator)
-    for q in questions:
-        q["answer"] = answers.get(q["id"])
-    asked = {q["id"] for q in questions}
     alerts = flight_alerts(recap.get("alerts") or [], recap.get("departed_at"), recap.get("arrival_at"))
     hazards = forecast_at_level(manifest, flown.get("ft"))
     out.update(
@@ -1023,10 +1020,21 @@ def build_report(recap: dict, *, lane: dict | None, manifest: dict | None, histo
         questions=questions,
         interest=build_interest(hazards, strip, airports, alerts, questions, cancelled=cancelled),
         alerts=[{k: a.get(k) for k in ("at", "event", "tier", "message", "aircraft_nm")} for a in alerts],
-        # Answers to questions no longer asked (rules changed): kept visible.
-        orphan_answers={k: v for k, v in answers.items() if k not in asked},
     )
-    return out
+    return with_answers(out, answers)
+
+
+def with_answers(report: dict, answers: dict) -> dict:
+    """``report`` with each question's ``answer`` set from ``answers`` (by
+    question id) and the answers to questions no longer asked (rules
+    changed) kept visible under ``orphan_answers``. Lets the answers PUT
+    re-shape the report it already built instead of building it again."""
+    questions = report.get("questions") or []
+    for q in questions:
+        q["answer"] = answers.get(q["id"])
+    asked = {q["id"] for q in questions}
+    report["orphan_answers"] = {k: v for k, v in answers.items() if k not in asked}
+    return report
 
 
 def report_for_flight(db, flight_id: str, *, now: datetime | None = None) -> dict:
@@ -1106,7 +1114,7 @@ def load_proxies(flight_dir: Path | None) -> dict[str, tuple[str | None, str | N
 
 __all__ = [
     "REPORT_VERSION", "build_report", "report_for_flight", "outcomes_from_answers", "validate_answer",
-    "question_as_asked", "push_text",
+    "question_as_asked", "push_text", "with_answers",
     "hazard_stretches", "forecast_at", "observed_class", "flown_altitude", "airport_at",
     "build_questions", "build_summary", "build_interest",
     "airport_line", "build_headline", "flight_alerts", "forecast_at_level", "load_proxies",

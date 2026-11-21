@@ -237,11 +237,11 @@ def put_flight_debrief_answers(
 ) -> dict:
     """Store answers to questions the report asks now, fold them into the
     flight's debrief (flown, form ``questions``, derived outcomes) and return
-    the report. 404 for a question the report does not ask; 422 for an
+    the report, built once and re-shaped with the stored answers. 404 for a question the report does not ask; 422 for an
     answer the question does not offer."""
     _load_owned_flight_or_404(db, flight_id, user_id)
-    from weatherbrief.debriefs.report import REPORT_VERSION, report_for_flight, validate_answer
-    from weatherbrief.storage.debriefs import save_answers
+    from weatherbrief.debriefs.report import REPORT_VERSION, report_for_flight, validate_answer, with_answers
+    from weatherbrief.storage.debriefs import load_answers, save_answers
 
     report = report_for_flight(db, flight_id)
     asked = {q["id"]: q for q in report.get("questions") or []}
@@ -257,7 +257,7 @@ def put_flight_debrief_answers(
                 raise HTTPException(status_code=422, detail=str(exc))
         items.append((question, a.answer, a.avoided, a.note))
     save_answers(db, flight_id, items, rules_version=REPORT_VERSION)
-    return report_for_flight(db, flight_id)
+    return with_answers(report, load_answers(db, flight_id))
 
 
 @router.get("/flights/{flight_id}/debrief/summary")

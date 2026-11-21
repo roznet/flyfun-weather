@@ -68,7 +68,9 @@ flight_debriefs.form            'questions' | 'legacy'  (existing rows backfille
 ```
 
 **Folded form.** Answering (`save_answers`) upserts `flight_debriefs` as `flown`, form
-`questions`, with `outcomes_json` derived from all stored answers (`outcomes_from_answers`):
+`questions`, with `outcomes_json` derived from all stored answers (`outcomes_from_answers`).
+Clearing every answer removes that derived row (unless it has a note), so it never reads as
+"flown, all as forecast":
 
 | Answer | Old outcome |
 |---|---|
@@ -99,8 +101,9 @@ Push only when: interesting, and `push_text` has a body (a question, or a headli
 from the forecast); the flight was started (`start_fix`) and airborne (`takeoff_at`); not
 cancelled / monitoring; bell not muted (flight, else trip); `notify_push` on; a device.
 `WB_DEBRIEF_PUSH=1` sends (payload `type: "debrief"`, "EGKB → EHRD · debrief" / "Two quick
-questions about the icing forecast."); unset logs `DEBRIEF_PUSH_WOULD_SEND` and stores
-`push_outcome = shadow`. Turn it on only once #1024 is on both stores.
+questions about the icing forecast."; the row reads `pending` until the send returns `sent` or
+`failed`); unset logs `DEBRIEF_PUSH_WOULD_SEND` and stores `push_outcome = shadow`. A flight whose
+build raises gets no row and is retried each cycle until it leaves the lookback (logged at error). Turn it on only once #1024 is on both stores.
 
 Flights without Start still get a report row and questions (asked at the planned level): they
 show in the app, they just never push.
