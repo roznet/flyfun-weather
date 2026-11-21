@@ -3,7 +3,7 @@
 > Post-flight report built on the server (#1023, umbrella #710): a headline that judges only what
 > the instruments saw, collapsed detail lines, airports at actual times, and one to three one-tap
 > questions on what they could not see. Answers are stored one row each and fold into the old
-> debrief outcomes. UI on iOS, Android and web is #1024.
+> debrief outcomes. UI on iOS, Android and web is #1024 (see Clients).
 
 ## Intent
 
@@ -123,6 +123,25 @@ show in the app, they just never push.
 `/api/flights` carries flags only: `debrief_ready` (report row exists) and `questions_open`
 (asked minus answered), two queries for the whole list. `get_briefing` (ChatGPT action and MCP)
 carries `debrief` from the summary, owner only.
+
+## Clients (#1024)
+
+One section on every client, owner only, shown once `debrief_ready` or the live window has
+ended: web `components/debrief-section.ts` (briefing page, Observations group, anchor
+`#debrief`), iOS `DebriefSectionView` + `DebriefSectionViewModel`, Android `DebriefSection.kt`
+(top of the Observed tab, which the briefing opens on while questions are open).
+
+Reading order: headline; "I flew it" / "I cancelled"; flown shows the report's questions as
+one-tap chips (re-tap clears) with "I changed level or route to stay out of it" on avoidable
+ones, cancelled shows the reason chips; one note per debrief (300 chars, saved with the
+decision, not per answer); the summary lines folded under Details; then the existing recap.
+
+The clients decide nothing: questions, wording and options come from the report. A decision
+tap `PUT /debrief` with `form: "questions"` then refetches the report (cancelled asks nothing).
+An answer `PUT /debrief/answers` with one item and swaps in the returned report. The only local
+state is an "avoided" tick before its question has an answer (sent with the answer) and the
+note being typed. Monitoring flights get no decision chips. A `type: "debrief"` push opens the
+section (iOS and Android treat it as an Observed push).
 
 ## Gotchas
 
