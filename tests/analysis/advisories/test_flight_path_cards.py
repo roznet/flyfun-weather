@@ -145,7 +145,7 @@ def test_vmc_low_deck_on_the_climb_is_reported_on_the_path():
     flat = _vmc(_ctx(soundings, live=False))
     live = _vmc(_ctx(soundings))
     assert flat.status == AdvisoryStatus.GREEN and "in cloud" not in flat.detail
-    assert "in cloud on the climb from nm" in live.detail
+    assert "the climb in cloud from nm" in live.detail
     assert live.affected_points > flat.affected_points
 
 
@@ -159,7 +159,82 @@ def test_vmc_shadow_records_without_changing_the_grade():
     soundings = {i: {"cloud_layers": LOW_DECK} for i in range(0, 3)}
     model = _vmc(_ctx(soundings, live=False))
     shadow = [s for s in model.shadow if s.rule == FLIGHT_PATH_SHADOW_RULE]
-    assert len(shadow) == 1 and "in cloud on the climb" in shadow[0].detail
+    assert len(shadow) == 1 and "the climb in cloud" in shadow[0].detail
+
+
+BKN_LOW_DECK = [EnhancedCloudLayer(base_ft=2000, top_ft=4000, coverage=CloudCoverage.BKN)]
+CLIMB, CRUISE_MID, DESCENT = range(0, 3), range(8, 13), range(18, N)
+
+
+def _three_phase(climb=LOW_DECK, cruise=CRUISE_DECK, descent=LOW_DECK):
+    soundings = {}
+    for rng, deck in ((CLIMB, climb), (CRUISE_MID, cruise), (DESCENT, descent)):
+        if deck:
+            soundings.update({i: {"cloud_layers": deck} for i in rng})
+    return soundings
+
+
+def test_vmc_live_text_names_the_phases_and_does_not_double_count():
+    """#1011: cloud in the climb, at cruise and in the descent."""
+    live = _vmc(_ctx(_three_phase()))
+    head, _, rest = live.detail.partition("; this includes ")
+    assert head.startswith("IMC on the climb, cruise and descent over ")
+    assert "at cruise" not in live.detail
+    # The climb / descent minutes are a breakdown of the headline, said once.
+    assert live.detail.count("this includes") == 1
+    assert rest.startswith("the climb in cloud from nm ")
+    assert ", and the descent in cloud from " in rest and "nm out" in rest
+
+
+def test_vmc_live_names_only_the_phases_with_cloud():
+    climb_only = _vmc(_ctx(_three_phase(cruise=None, descent=None)))
+    assert " on the climb over " in climb_only.detail
+    assert "cruise" not in climb_only.detail
+    cruise_only = _vmc(_ctx(_three_phase(climb=None, descent=None)))
+    assert " on the cruise over " in cruise_only.detail
+    assert "this includes" not in cruise_only.detail
+
+
+def test_vmc_live_clear_covers_the_whole_profile():
+    assert _vmc(_ctx({})).detail == "Clear on the climb, cruise and descent"
+
+
+def test_vmc_flat_text_is_unchanged():
+    flat = _vmc(_ctx(_three_phase(), live=False))
+    assert flat.detail.startswith("IMC at cruise over ")
+    assert "this includes" not in flat.detail
+    assert _vmc(_ctx({}, live=False)).detail == "Clear at cruise altitude"
+
+
+def test_vmc_ovc_headline_breaks_down_only_overcast():
+    """OVC headline: a BKN climb is not "included" in the OVC extent."""
+    ovc_cruise = {i: {"cloud_layers": CRUISE_DECK} for i in range(3, 18)}
+    soundings = {**_three_phase(climb=BKN_LOW_DECK, cruise=None, descent=LOW_DECK), **ovc_cruise}
+    live = _vmc(_ctx(soundings))
+    assert live.status == AdvisoryStatus.RED
+    assert live.detail.startswith("OVC on the cruise and descent over ")
+    assert "the climb in cloud" not in live.detail
+    assert "this includes the descent in cloud" in live.detail
+
+
+def test_vmc_live_grades_match_shadow():
+    """Wording only: the live grade equals the path grade recorded in shadow."""
+    for soundings in (_three_phase(), _three_phase(cruise=None), {}):
+        live = _vmc(_ctx(soundings))
+        shadow = [s for s in _vmc(_ctx(soundings, live=False)).shadow
+                  if s.rule == FLIGHT_PATH_SHADOW_RULE][0]
+        assert (shadow.status, shadow.detail) == (live.status, live.detail)
+
+
+@pytest.mark.parametrize("locale, start", [
+    ("fr", "IMC en montée, croisière et descente sur "),
+    ("de", "IMC im Steigflug, Reiseflug und Sinkflug über "),
+    ("es", "IMC en ascenso, crucero y descenso sobre "),
+])
+def test_vmc_live_text_is_localised(locale, start):
+    detail = _vmc(replace(_ctx(_three_phase()), locale=locale)).detail
+    assert detail.startswith(start)
+    assert "{" not in detail
 
 
 def test_cloud_tops_only_meet_layers_the_band_reaches():

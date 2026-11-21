@@ -40,8 +40,10 @@ class CloudTopEvaluator:
                 "Checks cloud tops for layers near cruise altitude "
                 "(base within clearance margin of cruise). Layers well "
                 "above cruise are ignored — the pilot flies clear below "
-                "them. Cloud tops near or above the flight ceiling means "
-                "the pilot cannot get on top if needed."
+                "them. When the flight path is live, a climb or descent "
+                "cell only meets layers within the margin of the highest "
+                "altitude it flies. Cloud tops near or above the flight "
+                "ceiling means the pilot cannot get on top if needed."
             ),
             category="cloud",
             timing_class="scan",

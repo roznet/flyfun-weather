@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from weatherbrief.analysis.advisories import RouteContext
 from weatherbrief.analysis.advisories._flight_path import (
+    cell_phases_in_cloud,
     flown_band,
     in_cloud_on_path,
     in_cloud_sentence,
+    path_is_live,
+    path_phases,
+    phase_list,
     with_path_shadow,
 )
 from weatherbrief.analysis.advisories._helpers import (
@@ -43,8 +47,9 @@ class VMCCruiseEvaluator:
             name="VMC at Cruise",
             short_description="Can maintain VMC at cruise altitude",
             description=(
-                "Checks cloud layers and NWP cloud cover at cruise altitude. "
-                "BKN or OVC coverage at cruise means IMC conditions."
+                "Checks cloud layers and NWP cloud cover at cruise altitude, "
+                "and on the climb and descent when the flight path is live. "
+                "BKN or OVC coverage where the aircraft flies means IMC conditions."
             ),
             category="cloud",
             timing_class="scan",
@@ -52,8 +57,8 @@ class VMCCruiseEvaluator:
             parameters=[
                 AdvisoryParameterDef(
                     key="extent_pct_amber",
-                    label="% of route in cloud at cruise (amber)",
-                    description="Route percentage with BKN at cruise for amber",
+                    label="% of route in cloud (amber)",
+                    description="Route percentage with BKN where flown for amber",
                     type="percent",
                     unit="%",
                     default=25,
@@ -63,8 +68,8 @@ class VMCCruiseEvaluator:
                 ),
                 AdvisoryParameterDef(
                     key="extent_pct_red",
-                    label="% of route overcast at cruise (red)",
-                    description="Route percentage with OVC at cruise for red",
+                    label="% of route overcast (red)",
+                    description="Route percentage with OVC where flown for red",
                     type="percent",
                     unit="%",
                     default=50,
@@ -86,6 +91,7 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
     extent_pct_red = params.get("extent_pct_red", 50)
     extent_min_nm = params.get("extent_min_nm", EXTENT_MIN_NM)
     cruise = ctx.cruise_altitude_ft
+    live = path_is_live(ctx)
 
     per_model: list[ModelAdvisoryResult] = []
 
@@ -99,6 +105,10 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
         # samples) and the result publishes the pair as the higher-threshold
         # field, so the printed sentence and the structured field agree.
         samples: list[EvidenceSample] = []
+        # Live path (#1011): the phases each flagged cell flies in cloud,
+        # per population, so the text names them instead of "at cruise".
+        phases_any: set[str] = set()
+        phases_ovc: set[str] = set()
 
         for idx, rpa in enumerate(ctx.analyses):
             dist = rpa.distance_from_origin_nm or 0.0
@@ -129,6 +139,13 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
                         worst_coverage = CloudCoverage.OVC
                     elif cl.coverage == CloudCoverage.BKN and worst_coverage != CloudCoverage.OVC:
                         worst_coverage = CloudCoverage.BKN
+
+            if live and worst_coverage in (CloudCoverage.BKN, CloudCoverage.OVC):
+                phases_any |= cell_phases_in_cloud(ctx, idx, sounding.cloud_layers)
+                if worst_coverage == CloudCoverage.OVC:
+                    phases_ovc |= cell_phases_in_cloud(
+                        ctx, idx, _only_ovc(sounding.cloud_layers),
+                    )
 
             if worst_coverage == CloudCoverage.OVC:
                 ovc_count += 1
@@ -167,6 +184,7 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
             lambda s: s.severity == HighlightSeverity.RED
         )
         loc = ctx.locale
+        ovc_only = False
         if total == 0:
             status = AdvisoryStatus.UNAVAILABLE
             detail = adv_t("no_data", loc)
@@ -175,19 +193,20 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
                 ovc_extent, amber_pct=extent_pct_red, min_nm=extent_min_nm,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
-                detail = adv_t("vmc_cruise.ovc", loc, extent=format_extent(ovc_extent))
+                ovc_only = True
+                detail = _text(ctx, "ovc", phases_ovc, extent=format_extent(ovc_extent))
             elif grade_extent(
                 summary.extent, amber_pct=extent_pct_amber,
                 min_nm=extent_min_nm,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.AMBER
-                detail = adv_t("vmc_cruise.imc", loc, extent=format_extent(summary.extent))
+                detail = _text(ctx, "imc", phases_any, extent=format_extent(summary.extent))
             elif affected > 0:
                 status = AdvisoryStatus.GREEN
-                detail = adv_t("vmc_cruise.mostly_clear", loc, extent=format_extent(summary.extent))
+                detail = _text(ctx, "mostly_clear", phases_any, extent=format_extent(summary.extent))
             else:
                 status = AdvisoryStatus.GREEN
-                detail = adv_t("vmc_cruise.clear", loc)
+                detail = _text(ctx, "clear", path_phases(ctx) if live else set())
 
         # Coverage tolerance (#391): a clear verdict on a sounding subset too
         # small to represent the route becomes UNAVAILABLE — a clear subset
@@ -197,8 +216,10 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
             status = AdvisoryStatus.UNAVAILABLE
             detail = adv_t("no_data", loc)
         elif total > 0:
+            # The breakdown counts the headline's own population (OVC only
+            # under the OVC headline), so "this includes" is always true.
             detail += in_cloud_sentence(ctx, in_cloud_on_path(
-                ctx, lambda i, m=model: _layers(ctx, i, m),
+                ctx, lambda i, m=model, o=ovc_only: _layers(ctx, i, m, ovc_only=o),
             ), loc)
 
         # Attach highlights only when the model has data (total > 0); an
@@ -223,6 +244,22 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
     return RouteAdvisoryResult.from_per_model("vmc_cruise", per_model, params)
 
 
-def _layers(ctx: RouteContext, idx: int, model: str):
+def _layers(ctx: RouteContext, idx: int, model: str, *, ovc_only: bool = False):
     sounding = ctx.analyses[idx].sounding.get(model)
-    return sounding.cloud_layers if sounding is not None else None
+    if sounding is None:
+        return None
+    return _only_ovc(sounding.cloud_layers) if ovc_only else sounding.cloud_layers
+
+
+def _only_ovc(layers):
+    return [cl for cl in layers if cl.coverage == CloudCoverage.OVC]
+
+
+def _text(ctx: RouteContext, key: str, phases: set[str], **params) -> str:
+    """The headline: "at cruise" in flat mode, the phases with cloud on a live path (#1011)."""
+    if not phases:
+        return adv_t(f"vmc_cruise.{key}", ctx.locale, **params)
+    return adv_t(
+        f"vmc_cruise.path.{key}", ctx.locale,
+        phases=phase_list(phases, ctx.locale), **params,
+    )
