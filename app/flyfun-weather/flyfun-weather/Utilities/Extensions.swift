@@ -74,7 +74,7 @@ nonisolated extension String {
 nonisolated extension Int {
     /// Zero-pad a compass heading/bearing to 3 digits (10° → "010"). Does NOT
     /// append the ° symbol — call sites add °/@ as they do today. Single source
-    /// of truth for heading display (AirportConditionsView, PirepListView).
+    /// of truth for heading display (AirportConditionsView).
     var paddedHeading: String {
         String(format: "%03d", self)
     }

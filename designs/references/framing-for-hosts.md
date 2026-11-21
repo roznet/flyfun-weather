@@ -71,7 +71,7 @@ Wait for `wb-embed:ready` before sending messages.
   | Group | Keys |
   |---|---|
   | Explore | `cross-section` (cross-section + map), `skewt` |
-  | Observations | `observed-glance`, `observed-ribbon`, `observed` (radar & lightning), `observations` (METAR/TAF), `sigmets`, `pireps`, `alternates` |
+  | Observations | `observed-glance`, `observed-ribbon`, `observed` (radar & lightning), `observations` (METAR/TAF), `sigmets`, `alternates` |
   | Discussion | `synopsis` (the AI digest), `dwd-charts`, `dwd-overview`, `gramet` |
   | Detail | `sounding`, `comparison` |
   | Not in the nav | `advisories` |

@@ -210,7 +210,7 @@ src/weatherbrief/
 │   ├── tokens.py      # API token mgmt for the current user
 │   ├── account_export.py # GDPR Art. 20 export: user downloads JSON of all their data
 │   ├── donations.py   # Stripe donation checkout + webhook (see project_donations_live)
-│   ├── aircraft.py / pireps.py / debriefs.py # iOS companion: aircraft registry, PIREPs, post-flight debrief
+│   ├── aircraft.py / pireps.py / debriefs.py # iOS companion: aircraft registry, PIREPs (API kept, no client since #1024), post-flight debrief
 │   ├── devices.py / notifications.py # APNs device-token registration + cross-surface badge/seen-state endpoints
 │   ├── agent.py       # ChatGPT Custom GPT front-door mounted at /agent/v1 (see project_chatgpt_connector)
 │   ├── nav.py         # Slim airports SQLite download for native clients (iOS ICAO autocomplete, ETag-gated)
@@ -270,7 +270,6 @@ web/
 ├── user-costs.html / cost-summary.html # Admin per-user costs + cost summary
 ├── maps.html          # Pan-European forecast/front maps
 ├── verification.html  # METAR/TAF verification dashboard
-├── pireps.html        # PIREP feed
 ├── donate.html / donate-thanks.html / donate-cancel.html # Stripe donation flow pages
 ├── eval.html          # Digest eval workbench page (admin/dev)
 ├── help.html / privacy.html # Help & documentation, privacy policy
@@ -282,7 +281,7 @@ web/
 │   ├── components/    # Reusable UI components (info-popup, welcome-wizard)
 │   ├── helpers/       # Metric lookup, threshold rendering
 │   ├── types/         # Shared TypeScript type definitions (metrics, advisories)
-│   ├── utils/         # atmo, duration, timezone, url-state, share-link, pirep helpers
+│   ├── utils/         # atmo, duration, timezone, url-state, share-link
 │   ├── data/          # Static data (metrics-catalog.json, metrics-display.json)
 │   ├── analytics/     # Client-side analytics event tracking
 │   ├── i18n/          # Localization strings
@@ -320,7 +319,7 @@ web/
 │   │   ├── weather-map.ts / synoptic-map.ts / weather-map-consensus.ts # Pan-European forecast + synoptic/front overlay maps
 │   │   ├── climatology-map.ts / climatology-tab.ts / climatology-datasets.ts # Climatology map dataset views
 │   │   ├── hewson-grid-layer.ts / hewson-colormaps.ts / front-style.ts # Hewson front grid overlay + styling
-│   │   ├── airport-profile-panel.ts / pirep-map.ts / surface-obscuration.ts # Airport profile panel, PIREP map, surface obscuration
+│   │   ├── airport-profile-panel.ts / surface-obscuration.ts # Airport profile panel, surface obscuration
 │   │   └── types.ts             # Shared viz type definitions
 │   ├── utils.ts       # Shared utilities (API base, auth checks, centralized nav banner)
 │   ├── theme.ts       # Dark/light/system theme: persistence, toggle UI, matchMedia listener
@@ -331,7 +330,6 @@ web/
 │   ├── user-costs-main.ts / cost-summary-main.ts # Admin per-user costs + cost summary entries
 │   ├── maps-main.ts       # Forecast/front maps page entry
 │   ├── verification-main.ts # Verification dashboard entry
-│   ├── pireps-main.ts     # PIREP feed entry
 │   ├── donate-main.ts     # Donation page entry
 │   ├── help-main.ts       # Help page entry
 │   └── eval/              # Digest eval workbench UI (admin/dev)

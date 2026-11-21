@@ -50,7 +50,6 @@ struct BriefingContainerView: View {
     /// Post with the next fix (#761): set on Start Flight and on return to the
     /// foreground, so the post carries a fix taken from that moment on.
     @State private var postOnNextFix = false
-    @State private var showingPirepSheet = false
     /// Per-flight notification override (bell), tracked locally since `flight`
     /// is immutable. Seeded from the flight in `.task`; updated optimistically.
     @State private var notifyOverride: FlightNotifyOverride = .default
@@ -129,8 +128,7 @@ struct BriefingContainerView: View {
                     if let observedAsOf = viewModel.observedAsOf {
                         ObservedAsOfRow(date: observedAsOf)
                     }
-                    BriefingContentView(viewModel: viewModel, trackingService: trackingService,
-                                        onAddPirep: { showingPirepSheet = true })
+                    BriefingContentView(viewModel: viewModel, trackingService: trackingService)
                 }
             } else {
                 ProgressView("Loading briefing...")
@@ -192,19 +190,11 @@ struct BriefingContainerView: View {
         .sheet(item: $feedbackTarget) { target in
             FeedbackFormView(flightId: target.flightId, packTimestamp: target.packTimestamp)
         }
-        .sheet(isPresented: $showingPirepSheet) {
-            if viewModel != nil, let repo = appState.repository {
-                PirepReportingView(viewModel: PirepViewModel(flight: flight, repository: repo,
-                                                                      offlineStore: appState.pirepOfflineStore),
-                                   trackingService: trackingService)
-            }
-        }
         .task {
             guard let repo = appState.repository else { return }
             notifyOverride = flight.notifyOverrideMode
-            // Pick up server-side flag changes (e.g. pirep_can_publish, and the
-            // account "Briefing updates" setting the bell's Default hint reflects)
-            // before the toolbar decides whether to show the PIREP button.
+            // Pick up server-side preference changes (e.g. the account "Briefing
+            // updates" setting the bell's Default hint reflects).
             await appState.refreshUserPreferences()
             // Cache flight data for offline recovery
             if let caching = repo as? CachingBriefingRepository {
@@ -224,7 +214,7 @@ struct BriefingContainerView: View {
                 let flight = flight
                 tracking.onLanding = { fixes in positions.submit(fixes, flightId: flight.id, landed: true) }
                 tracking.onOneShotFix = { fix in
-                    // The PIREP form's fix, or the one taken on opening. Only
+                    // The fix taken on opening. Only
                     // after Start (#812): the server reads the first ground fix
                     // at the departure as Start.
                     let started = positions.isStartedNotLanded(flightId: flight.id)
@@ -257,12 +247,6 @@ struct BriefingContainerView: View {
             // before `checkActiveRefresh`, which can poll for minutes.
             vm.startLivePolling()
             await vm.checkActiveRefresh()
-            // Only load PIREPs when the user may view them — the query 403s for a
-            // publish-only account, which would strand the PIREPs tab on an error
-            // screen and hide its "Report a PIREP" action.
-            if PirepFeature.isEnabled, appState.userPreferences.preferences.pirepCanView {
-                await vm.loadPireps()
-            }
             // Opening the briefing clears this flight from the badge (web + app),
             // and fires a silent badge-sync push to the user's other devices.
             await appState.markBriefingSeen(flightId: flight.id)
@@ -323,7 +307,7 @@ struct BriefingContainerView: View {
     /// Whether ⋯ has anything to offer. Only false for a read-only shared flight
     /// with no pack yet, where there is nothing to edit, share or report on.
     private var hasMoreActions: Bool {
-        canEditFlight || canShare || canSetNotifications || feedbackPackTimestamp != nil || canReportPirep
+        canEditFlight || canShare || canSetNotifications || feedbackPackTimestamp != nil
     }
 
     /// Edit / Duplicate (#885): the briefing is where a pilot notices the date
@@ -346,12 +330,6 @@ struct BriefingContainerView: View {
         }
     }
 
-    /// No in-flight-window gate: a PIREP is a position report, and the
-    /// reporting form grabs its own GPS fix.
-    private var canReportPirep: Bool {
-        viewModel != nil && flight.coverage == nil
-            && PirepFeature.isEnabled && appState.userPreferences.preferences.pirepCanPublish
-    }
     /// Feedback about the pack on screen (#616).
     private var feedbackPackTimestamp: String? {
         guard flight.coverage == nil else { return nil }
@@ -403,24 +381,14 @@ struct BriefingContainerView: View {
                     }
                 }
             }
-            if feedbackPackTimestamp != nil || canReportPirep {
+            if let timestamp = feedbackPackTimestamp {
                 Section {
-                    if let timestamp = feedbackPackTimestamp {
-                        Button {
-                            feedbackTarget = BriefingFeedbackTarget(flightId: flight.id, packTimestamp: timestamp)
-                        } label: {
-                            Label("Send Feedback on This Briefing", systemImage: "exclamationmark.bubble")
-                        }
-                        .accessibilityIdentifier("briefingFeedbackButton")
+                    Button {
+                        feedbackTarget = BriefingFeedbackTarget(flightId: flight.id, packTimestamp: timestamp)
+                    } label: {
+                        Label("Send Feedback on This Briefing", systemImage: "exclamationmark.bubble")
                     }
-                    if canReportPirep {
-                        Button {
-                            showingPirepSheet = true
-                        } label: {
-                            Label("Report PIREP", systemImage: "square.and.pencil")
-                        }
-                        .accessibilityIdentifier("reportPirepButton")
-                    }
+                    .accessibilityIdentifier("briefingFeedbackButton")
                 }
             }
         } label: {
@@ -845,22 +813,9 @@ private struct DownloadBannerView: View {
 private struct BriefingContentView: View {
     @Bindable var viewModel: BriefingViewModel
     var trackingService: FlightTrackingService
-    /// Opens the PIREP reporting sheet (owned by the container's toolbar state),
-    /// so the PIREPs tab can carry its own permanent "+".
-    var onAddPirep: () -> Void
-    @Environment(AppState.self) private var appState
-
-    private var canPublishPireps: Bool {
-        appState.userPreferences.preferences.pirepCanPublish
-    }
 
     private var tabs: [BriefingTab] {
-        // A publisher can reach the PIREPs tab even without view permission —
-        // that's where the permanent "Report a PIREP" action lives. Hidden for
-        // everyone while `PirepFeature` is off (#661).
-        let pireps = PirepFeature.isEnabled
-            && (appState.userPreferences.preferences.pirepCanView || canPublishPireps)
-        return BriefingTab.tabs(showsObserved: viewModel.showsObservedTab, showsPireps: pireps)
+        BriefingTab.tabs(showsObserved: viewModel.showsObservedTab)
     }
 
     var body: some View {
@@ -910,14 +865,6 @@ private struct BriefingContentView: View {
             CrossSectionView(viewModel: viewModel, trackingService: trackingService)
         case .map:
             RouteMapView(viewModel: viewModel, trackingService: trackingService)
-        case .pireps:
-            PirepListView(
-                pirepsState: viewModel.pirepsState,
-                canPublish: canPublishPireps,
-                canView: appState.userPreferences.preferences.pirepCanView,
-                onAdd: onAddPirep,
-                retryAction: { await viewModel.loadPireps() }
-            )
         }
     }
 }

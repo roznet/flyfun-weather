@@ -360,7 +360,7 @@ class CachingBriefingRepository(
         online.liveLayer(flightId)
 
     // ========================================================================
-    // Refresh, Time Options, Observed, Debrief, PIREPs, Shared (online-only)
+    // Refresh, Time Options, Observed, Debrief, Shared (online-only)
     // ========================================================================
 
     override suspend fun triggerRefresh(flightId: String, force: Boolean): RefreshStatusResponse =
@@ -413,12 +413,6 @@ class CachingBriefingRepository(
 
     override suspend fun saveDebriefAnswers(flightId: String, req: DebriefAnswersRequest): DebriefReport =
         online.saveDebriefAnswers(flightId, req)
-
-    override suspend fun submitPirep(req: SubmitPirepRequest): PirepResponse =
-        online.submitPirep(req)
-
-    override suspend fun listPireps(flightId: String): PirepListResponse =
-        online.listPireps(flightId)
 
     override suspend fun resolveSharedFlight(code: String): FlightResponse =
         online.resolveSharedFlight(code)

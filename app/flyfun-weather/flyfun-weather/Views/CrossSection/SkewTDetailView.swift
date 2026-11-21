@@ -415,7 +415,7 @@ struct SkewTDetailView: View {
             // Scrubbing the cross-section changes the active point, which
             // cancels this in-flight sounding fetch via `.task(id:)`. That's
             // benign — a fresh task is already loading the new point — so don't
-            // flash a "network error cancelled" wall (mirrors loadPireps). Leave
+            // flash a "network error cancelled" wall. Leave
             // state as .loading; the superseding task publishes the result.
             Self.logger.debug("Sounding load cancelled — ignoring")
         } catch is CancellationError {

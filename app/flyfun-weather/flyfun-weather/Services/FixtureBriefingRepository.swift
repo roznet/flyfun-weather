@@ -201,7 +201,6 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
         try JSONDecoder.weatherBrief.decode(UsageSummaryResponse.self, from: Data("{}".utf8))
     }
     func searchAircraftTypes(_ query: String) async throws -> [AircraftTypeResponse] { [] }
-    func fetchPireps(flightId: String) async throws -> PirepListResponse { PirepListResponse(items: [], count: 0) }
     func fetchDebrief(flightId: String) async throws -> DebriefResponse { throw APIError.notFound }
     func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse {
         guard Self.mockDebrief, isBriefed(flightId) else { throw FixtureError.notProvided("upsertDebrief") }
@@ -468,8 +467,6 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     }
     func refreshStatus(flightId: String) async throws -> RefreshStatusResponse { throw FixtureError.notProvided("refreshStatus") }
     func activeRefreshes() async throws -> [ActiveRefreshResponse] { [] }
-    func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse { throw FixtureError.notProvided("submitPirep") }
-    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] { throw FixtureError.notProvided("submitPirepsBatch") }
 }
 
 // MARK: - Trips (#607)

@@ -2,7 +2,7 @@
 
 > End-state feature set. Build order in [Roadmap](./ios-app-roadmap.md).
 
-> **Status framing — read this before believing any present tense below.** This doc is the *target* feature set, largely written before the app existed, and most of it is still forward-looking. Shipped today: offline pack download + native briefing viewer, APNs refresh-complete push, "Start Flight" GPS tracking, and briefing-anchored PIREP filing with an offline queue. NOT built in the app: the proactive prompting engine, standalone/community PIREP filing and the PIREP map, voice PIREP, and live WebSocket sharing. Corrections are inlined per section. [Overview](./ios-app-overview.md) is the authoritative current status.
+> **Status framing — read this before believing any present tense below.** This doc is the *target* feature set, largely written before the app existed, and most of it is still forward-looking. Shipped today: offline pack download + native briefing viewer, APNs refresh-complete push, and "Start Flight" GPS tracking. **PIREPs are dropped:** the owner decided not to pursue them, and the briefing-anchored PIREP filing that did ship (with an offline queue) was removed from every client in #1024; the server API stays. Everything PIREP below is vision only. NOT built in the app: the proactive prompting engine, standalone/community PIREP filing and the PIREP map, voice PIREP, and live WebSocket sharing. Corrections are inlined per section. [Overview](./ios-app-overview.md) is the authoritative current status.
 
 ## Vision
 
@@ -61,13 +61,13 @@ PIREPs are **first-class** — they exist independently of flights. A pilot does
 
 When filed during an active flight session, it's linked to the flight for verification — but the link is optional. The data model links a PIREP to a flight via a nullable `pack_id` (FK to the briefing pack it was filed against, `db/models.py::PirepRow`); standalone PIREPs leave it null. There is no `session_id` — the flight session is purely client-side (`FlightTrackingService`), not persisted on the server.
 
-**Shipped reality (app side):** every filing entry point is anchored to a briefing — the toolbar button, the PIREPs-tab bar, the flight-list context menu. There is no "File PIREP" from a cold start, no airport picker. The app also sends **no** `pack_id`; the server infers the flight link from `observed_at` falling inside the flight window *and* the reporter being the flight owner (`storage/pireps.py`), so an out-of-window or subscriber report silently becomes a standalone community report. Server-side the community surface is complete — `GET /api/pireps` filters by `airport` / `bounds` / `hazard` / `min_severity` / altitude / aircraft type, and `web/pireps.html` consumes it — it is the *client* that hasn't caught up.
+**As it shipped (app side, removed in #1024):** every filing entry point was anchored to a briefing — the toolbar button, the PIREPs-tab bar, the flight-list context menu. There was no "File PIREP" from a cold start, no airport picker. The app also sent **no** `pack_id`; the server infers the flight link from `observed_at` falling inside the flight window *and* the reporter being the flight owner (`storage/pireps.py`), so an out-of-window or subscriber report silently becomes a standalone community report. Server-side the community surface is complete — `GET /api/pireps` filters by `airport` / `bounds` / `hazard` / `min_severity` / altitude / aircraft type, and no client consumes it since #1024.
 
 ### Three ways to file
 
 1. **Proactive prompting** (in-flight, active session) — app watches forecast, tracks position, prompts at transition points with pre-populated observations. Pilot confirms/edits/dismisses. **Not built.**
-2. **Pilot-initiated in-flight** — "Report" button during active session. **Built**, but reachable from the briefing at any time (gated on `pirepCanPublish` only, no flight-window gate), and fields are pre-filled from GPS, not from forecast — they start unselected on purpose, to avoid confirmation bias.
-3. **Standalone** (no flight required) — anytime, ground or in the pattern. Tap "File PIREP", pick airport or use current GPS location, report conditions. **Not built in the app** (the server accepts it; the web page offers it).
+2. **Pilot-initiated in-flight** — "Report" button during active session. **Built, then removed in #1024**; it was reachable from the briefing at any time (gated on `pirepCanPublish` only, no flight-window gate), and fields are pre-filled from GPS, not from forecast — they start unselected on purpose, to avoid confirmation bias.
+3. **Standalone** (no flight required) — anytime, ground or in the pattern. Tap "File PIREP", pick airport or use current GPS location, report conditions. **Not built in the app** (the server accepts it; the web page that offered it was removed in #1024).
 
 ### Proactive Forecast-Driven Prompts (unbuilt — target design)
 
@@ -105,7 +105,7 @@ The prompt-governing rules below are **design, not code** — nothing fires prom
 
 ### Pilot-Initiated PIREPs (Always Available)
 
-Persistent "Report" button — flag something the app didn't prompt about, report unexpected conditions, or share what you're seeing. Full report card with all fields pre-populated from forecast at current position. The PIREP `source` field is a plain string validated server-side against `PIREP_SOURCES = ("manual", "inflight", "postflight")` (`db/models.py`); the active in-flight report card currently submits `"inflight"` (see `PirepViewModel`).
+Persistent "Report" button — flag something the app didn't prompt about, report unexpected conditions, or share what you're seeing. Full report card with all fields pre-populated from forecast at current position. The PIREP `source` field is a plain string validated server-side against `PIREP_SOURCES = ("manual", "inflight", "postflight")` (`db/models.py`); the in-flight report card submitted `"inflight"` until it was removed in #1024.
 
 **Auto-populated from device sensors**: position (lat/lon) → nearest waypoint, GPS altitude (with pressure altitude correction option), timestamp, ground speed, track. *Shipped* for lat/lon + altitude (live track or one-shot fix).
 
@@ -186,7 +186,7 @@ Scrollable timeline of all observations made during the flight, shown on the rou
 - Post-flight — review of the entire flight's weather experience
 - Data source for forecast verification
 
-What exists instead: the briefing's **PIREPs tab** (`PirepListView`), a flat list of that flight's reports with severity bars and hazard icons. No route positioning, no amend.
+What existed instead, until #1024 removed it: the briefing's **PIREPs tab**, a flat list of that flight's reports with severity bars and hazard icons. No route positioning, no amend.
 
 ## 4. Community PIREP Feed (server-side only today)
 
@@ -195,15 +195,15 @@ All shared PIREPs form a community picture visible to every user, regardless of 
 - **Airport PIREPs** — tap any airport for recent PIREPs filed there/nearby. "What are conditions at EGTF right now?"
 - **Route-aware** — when viewing a briefing, PIREPs near the route are highlighted automatically (like today's METAR/TAF corridor on the web)
 
-The query layer for all three already exists (`api/pireps.py::query_pireps` — airport, bounds, hazard, severity, altitude, aircraft filters) and `web/pireps.html` renders it. The app consumes only the `flight_id` scoping.
+The query layer for all three already exists (`api/pireps.py::query_pireps` — airport, bounds, hazard, severity, altitude, aircraft filters); the `web/pireps.html` page that rendered it was removed in #1024, so no client uses it.
 
 ## 5. Online Sharing (Starlink / Cellular)
 
 When connectivity is available during an active flight, observations stream in real-time:
-- **Outbound** — your observations pushed to server as created. *Shipped*, as plain POST on submit
+- **Outbound** — your observations pushed to server as created. Shipped as plain POST on submit, removed with the PIREP UI in #1024
 - **Inbound** — you receive other pilots' recent observations along/near your route. **Not built**
 - **Display** — other pilots' reports as markers on route, severity-coded. **Not built**
-- **Graceful degradation** — connection drops → queue locally, sync when reconnected. App never blocks on network. *Shipped*: `PirepOfflineStore` actor (JSON queue in Documents, dedup by `client_uuid`) flushed via `POST /api/pireps/batch` on the next successful online submit
+- **Graceful degradation** — connection drops → queue locally, sync when reconnected. App never blocks on network. The PIREP offline queue that did this (flushed via `POST /api/pireps/batch`) was removed in #1024
 
 No WebSocket exists — the "real-time stream" is still request/response. Standalone PIREPs would sync immediately if online, or queue.
 

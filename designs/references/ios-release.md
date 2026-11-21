@@ -68,8 +68,8 @@ Why each declared type is there:
 | `NSPrivacyCollectedDataTypeEmailAddress` | Account identity |
 | `NSPrivacyCollectedDataTypeName` | Account identity |
 | `NSPrivacyCollectedDataTypeUserID` | Account identity |
-| `NSPrivacyCollectedDataTypePreciseLocation` | PIREPs upload location tied to the user on the server — must be `Linked=true` |
-| `NSPrivacyCollectedDataTypeOtherUserContent` | Flight routes, waypoints, PIREP notes, feedback |
+| `NSPrivacyCollectedDataTypePreciseLocation` | Flight tracking uploads GPS fixes tied to the user's flight on the server — must be `Linked=true` (PIREPs were the original reason; their client UI was removed in #1024) |
+| `NSPrivacyCollectedDataTypeOtherUserContent` | Flight routes, waypoints, debriefs, feedback |
 | `NSPrivacyCollectedDataTypeProductInteraction` | API call counts, LLM token usage |
 
 `ITSAppUsesNonExemptEncryption = false` in `Info.plist` declares HTTPS-only usage, which stops

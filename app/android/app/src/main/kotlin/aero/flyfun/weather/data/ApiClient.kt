@@ -699,7 +699,7 @@ class ApiClient(
         postNoBody("/api/trips/${encodePathSegment(tripId)}/ai-summary")
 
     // ========================================================================
-    // Aircraft, Profiles, Preferences, Usage, Feedback, Messages, PIREPs
+    // Aircraft, Profiles, Preferences, Usage, Feedback, Messages
     // ========================================================================
 
     suspend fun listAircraft(): List<AircraftResponse> = get("/api/aircraft")
@@ -773,12 +773,6 @@ class ApiClient(
 
     suspend fun submitFeedback(req: FeedbackRequest) =
         postIgnoreResponse("/api/feedback", req)
-
-    suspend fun submitPirep(req: SubmitPirepRequest): PirepResponse =
-        post("/api/pireps", req)
-
-    suspend fun listPireps(flightId: String): PirepListResponse =
-        get("/api/pireps", listOf("flight_id" to flightId))
 
     /** App GPS fixes for a flight (#761), owner only; `landed` with the landing auto-stop (#874). */
     suspend fun postLivePosition(flightId: String, request: LivePositionRequest): LivePositionResult =

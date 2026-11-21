@@ -73,8 +73,6 @@ export interface PreferencesResponse {
   notify_decay_notice: boolean;
   // Registered APNs device count — push is only actionable with ≥1 device.
   push_device_count: number;
-  pirep_can_view: boolean;
-  pirep_can_publish: boolean;
   donations_enabled: boolean; // global: Stripe configured (gates the donate link)
   // Airports where the pilot declared an unpublished/self-briefed approach
   // (#510). Always canonical (uppercase, deduped) — the server normalizes on

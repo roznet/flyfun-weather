@@ -48,12 +48,6 @@ struct FlightListView: View {
     /// Bumped after a save from the briefing's own Edit, so a same-id edit rebuilds
     /// the briefing (its view model loads once per identity) and shows the new values.
     @State private var briefingReloadToken = 0
-    /// A flight the user chose to file a PIREP for from the list (context menu),
-    /// presented as the reporting sheet. nil when closed.
-    @State private var pirepFlight: FlightResponse?
-    /// One-shot-location tracking service backing the list-presented PIREP sheet
-    /// — the list carries no live route track, so the form fetches its own fix.
-    @State private var pirepTrackingService = FlightTrackingService()
     /// Compact-width forecast-map cover (the app's first `fullScreenCover`) and
     /// the deep-link state it opens with.
     @State private var showMapCover = false
@@ -376,17 +370,6 @@ struct FlightListView: View {
                                        activities: [OpenInSafariActivity()])
                         .presentationDetents([.medium, .large])
                         .ignoresSafeArea()
-                }
-            }
-            .sheet(item: $pirepFlight) { flight in
-                // File a PIREP straight from the list (context menu). The form
-                // grabs a one-shot GPS fix to pre-fill lat/lon/altitude.
-                if let repo = appState.repository {
-                    PirepReportingView(
-                        viewModel: PirepViewModel(flight: flight, repository: repo,
-                                                  offlineStore: appState.pirepOfflineStore),
-                        trackingService: pirepTrackingService
-                    )
                 }
             }
         } detail: {
@@ -1027,25 +1010,6 @@ struct FlightListView: View {
                 } label: {
                     Label("Duplicate\u{2026}", systemImage: "plus.square.on.square")
                 }
-            }
-            // File a pilot report for this flight. Gated so a list-filed report
-            // actually links to the flight's tab: the server links a pack_id-less
-            // PIREP only when observed_at is in the flight's window AND the report's
-            // user_id equals the flight OWNER's (storage/pireps.py:130-140). So we
-            // require both `isEditable` (owner — a subscriber's report never carries
-            // the owner's id, so it'd orphan regardless of timing) and the tracking
-            // window. Not gated on offline — `PirepViewModel.submit` queues
-            // transient-network failures via `PirepOfflineStore`.
-            if PirepFeature.isEnabled,
-               appState.userPreferences.preferences.pirepCanPublish,
-               flight.isEditable,
-               flight.isInTrackingWindow() {
-                Button {
-                    pirepFlight = flight
-                } label: {
-                    Label("Add PIREP", systemImage: "cloud.sun")
-                }
-                .accessibilityIdentifier("addPirepMenuItem")
             }
             // Owner sharing (#446): share the short /s/{code} link. Hidden for
             // private flights and subscribers (isShareable) — recipients of a

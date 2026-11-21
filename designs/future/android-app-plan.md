@@ -219,7 +219,7 @@ An agentic workflow moves fast when it has a fast, truthful automated oracle. Un
 - [ ] Add Map Observed overlays: OPERA radar + EUMETView IR satellite `TileOverlay`, age-faded lightning bolt glyphs, and radar cell contours + motion arrows (`RouteCellsModel`).
 - [ ] Build the flight-day **`ObservedTab`**: Haiku highlight + 👍/👎 rating, nutshell glance card, interactive route ribbon, departure/destination runway + wind dials, *"Since this briefing"* live changes + history trails, radar storms list, METAR/TAF with observation proxies, and route SIGMETs.
 - [ ] Implement **In-Flight GPS Tracking (`FlightTrackingService`)** as an Android Foreground Service (`foregroundServiceType="location"`) with ongoing notification, route projection, live aircraft icon on Map & Cross-Section, and sparse GPS fix reporting (`LivePositionService` → `POST /flights/{id}/live/position`).
-- [ ] Port `PirepOfflineStore` and `PirepReportingSheet` (behind `PirepFeature.isEnabled`).
+- [ ] ~~Port `PirepOfflineStore` and `PirepReportingSheet` (behind `PirepFeature.isEnabled`).~~ Dropped: ported, then removed from both apps in #1024 (owner dropped PIREPs; server API kept).
 
 ### Phase 4: Push Notifications, Deep Links, Polish & Play Store Release
 - [ ] Wire `FirebaseMessagingService` for briefing-refresh and flight-day pushes, foreground suppression, server badge sync (`/flights/badge`, `/flights/{id}/seen`), and cold-start `PendingNavigation` routing.

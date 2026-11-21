@@ -1,5 +1,10 @@
 # PIREP Collection & Model Validation — Implementation Plan
 
+> **Status 2026-11-21: not pursued.** The owner decided PIREPs will not happen. The PIREP
+> client UI (iOS, Android, web) was removed in #1024; the server API (`/api/pireps`,
+> `PirepRow`, preference flags, retention exemption) is kept. The rest of this plan is
+> historical.
+>
 > **Direction changed 2026-10-06:** pilot reports move into the flight debrief
 > (private bookmarks + an automatic observed recap; sharing becomes an optional later
 > phase). See [flight-debrief-observed.md](./flight-debrief-observed.md). M2/M3 below

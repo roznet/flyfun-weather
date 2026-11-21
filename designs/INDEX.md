@@ -156,8 +156,8 @@ Key exports: `DisplayStore`, `ingest`, `validate`, `frames_status`, `filter_bbox
 ## iOS app
 
 ### ios-app-overview
-iOS/iPad companion app entry point — start here, links to all ios-app-* docs. Phase 1 + Phase 2 complete; Phase 3 M0/M1 (aircraft registry, PIREP submit/view) shipped. Briefing tabs Advisory · Discussion · Cross-Section · Map (#310), plus a flight-day Observed tab appended at the right (#661: live changes, radar/lightning, experimental radar cells, METAR/TAF, SIGMET; opens there once in the live window); PIREP UI hidden (`PirepFeature`); also live tracking, flight sharing, post-flight debrief, forecast map + historical map, offline auto-download + eviction, APNs push, App Intents, What's New.
-Key exports: `AppState`, `BriefingViewModel`, `BriefingTab`, `ObservedTabView`, `RouteCellsModel`, `CellsOverlay`, `CachingBriefingRepository`, `CrossSectionRenderer`, `PirepViewModel`, `PirepOfflineStore`, `HelpCatalogStore`, `WhatsNewStore`
+iOS/iPad companion app entry point — start here, links to all ios-app-* docs. Phase 1 + Phase 2 complete; Phase 3 M0 (aircraft registry) shipped; the M1 PIREP UI was removed in #1024 (server API kept). Briefing tabs Advisory · Discussion · Cross-Section · Map (#310), plus a flight-day Observed tab appended at the right (#661: live changes, radar/lightning, experimental radar cells, METAR/TAF, SIGMET; opens there once in the live window); also live tracking, flight sharing, post-flight debrief, forecast map + historical map, offline auto-download + eviction, APNs push, App Intents, What's New.
+Key exports: `AppState`, `BriefingViewModel`, `BriefingTab`, `ObservedTabView`, `RouteCellsModel`, `CellsOverlay`, `CachingBriefingRepository`, `CrossSectionRenderer`, `HelpCatalogStore`, `WhatsNewStore`
 → Full doc: ios-app-overview.md
 
 ### ios-app-architecture
@@ -165,17 +165,17 @@ Tech stack (SwiftUI, no SwiftData, MapKit, iOS 26.2+), MVVM + Repository pattern
 → Full doc: ios-app-architecture.md
 
 ### ios-app-data-models
-No SwiftData. Three plain-struct tiers under `Models/`: Codable API structs, `Viz*` domain structs (`VizData.swift`) for rendering, and the `Assessment` enum. Persistence is JSON-on-disk (`BriefingCacheStore` pack cache, `PirepOfflineStore` queue, help-catalog and what's-new stores) plus UserDefaults. Flat PIREP model with client UUIDs for idempotent offline sync.
-Key exports: `FlightResponse`, `PackMetaResponse`, `RouteAnalysesResponse`, `AdvisoriesResponse`, `SnapshotResponse`, `VizRouteData`, `VizPoint`, `Assessment`, `BriefingCacheStore`, `PirepOfflineStore`
+No SwiftData. Three plain-struct tiers under `Models/`: Codable API structs, `Viz*` domain structs (`VizData.swift`) for rendering, and the `Assessment` enum. Persistence is JSON-on-disk (`BriefingCacheStore` pack cache, help-catalog and what's-new stores) plus UserDefaults. No observation model (the PIREP structs went with the client UI in #1024).
+Key exports: `FlightResponse`, `PackMetaResponse`, `RouteAnalysesResponse`, `AdvisoriesResponse`, `SnapshotResponse`, `VizRouteData`, `VizPoint`, `Assessment`, `BriefingCacheStore`
 → Full doc: ios-app-data-models.md
 
 ### ios-app-server-api
-Server API contract for the iOS app: auth (Google `?platform=ios` + native Apple), flights CRUD and the PATCH-vs-move structural-edit rule, packs/snapshot/advisories/sounding-profile, queued vs streamed refresh, the gzipped offline `/bundle`, and PIREPs (`/api/pireps`) with their row model and lat/lon-box spatial queries.
+Server API contract for the iOS app: auth (Google `?platform=ios` + native Apple), flights CRUD and the PATCH-vs-move structural-edit rule, packs/snapshot/advisories/sounding-profile, queued vs streamed refresh, the gzipped offline `/bundle`, and PIREPs (`/api/pireps`, server kept, no client since #1024) with their row model and lat/lon-box spatial queries.
 Key exports: `/api/flights/{id}/move`, `/api/flights/{id}/packs/{ts}/bundle`, `/api/flights/{id}/packs/refresh`, `/api/refresh/active`, `/api/pireps`, `PirepRow`, `list_pireps`
 → Full doc: ios-app-server-api.md
 
 ### ios-app-features
-End-state feature set + vision, largely NOT as-built — read the status banner first. Briefing sync (offline payload + on-demand artifacts), PIREP filing modes, voice PIREP via Siri, passive collection, observation timeline, community feed, live sharing, post-flight verification. Shipped: pack download, refresh push, Start Flight tracking, briefing-anchored PIREP filing with offline queue; unbuilt: prompting engine, standalone/community PIREP UI, voice, WebSocket. Authoritative status: ios-app-overview.md
+End-state feature set + vision, largely NOT as-built — read the status banner first. Briefing sync (offline payload + on-demand artifacts), PIREP filing modes, voice PIREP via Siri, passive collection, observation timeline, community feed, live sharing, post-flight verification. Shipped: pack download, refresh push, Start Flight tracking; PIREPs dropped (briefing-anchored filing shipped, removed in #1024); unbuilt: prompting engine, standalone/community PIREP UI, voice, WebSocket. Authoritative status: ios-app-overview.md
 → Full doc: ios-app-features.md
 
 ### briefing-charts-ios
@@ -184,16 +184,16 @@ Key exports: `build_pack_charts_manifest`, `PackChartsManifest`, `resolve_small_
 → Full doc: briefing-charts-ios.md
 
 ### ios-app-ui
-Cockpit UI design principles (one-handed, large tap targets, high-contrast, non-blocking) and screen layouts. As-built: briefing viewer + a single manual `PirepReportingView` sheet inside the existing tabs. The in-flight mode/map and report-card variants are original Phase-3 vision, NOT yet built.
+Cockpit UI design principles (one-handed, large tap targets, high-contrast, non-blocking) and screen layouts. As-built: the tabbed briefing viewer (the manual PIREP sheet that shipped was removed in #1024). The in-flight mode/map and report-card variants are original Phase-3 vision, NOT yet built.
 → Full doc: ios-app-ui.md
 
 ### ios-app-sync-prompting
-Sync engine + forecast-driven prompting engine — Phase 3a/3b. Built: the JSON-file `PirepOfflineStore` queue (foreground + post-submit flush) and route-position projection via `FlightTrackingService`. Still spec-only: connectivity-triggered flush, WebSocket real-time, forecast look-ahead, 7 trigger types, priority queue, cross-section forecast lookup.
-Key exports: `PirepOfflineStore`, `NetworkMonitor`, `FlightTrackingService`, `ProjectedPosition`, `AppState.syncPendingPireps()`
+Sync engine + forecast-driven prompting engine — Phase 3a/3b. Built: route-position projection via `FlightTrackingService` (the PIREP offline queue was removed in #1024). Still spec-only: the offline observation queue, WebSocket real-time, forecast look-ahead, 7 trigger types, priority queue, cross-section forecast lookup.
+Key exports: `NetworkMonitor`, `FlightTrackingService`, `ProjectedPosition`
 → Full doc: ios-app-sync-prompting.md
 
 ### ios-app-roadmap
-3-phase roadmap: Phase 1 (online viewer — done), Phase 2 (offline caching + APNs refresh push — done; `/companion` payload and offline map tiles never built), Phase 3 (3a PIREP filing + offline queue partly shipped, 3b prompting and 3c live sharing unbuilt). Records which planned designs the shipped code diverged from, plus decisions made and open questions.
+3-phase roadmap: Phase 1 (online viewer — done), Phase 2 (offline caching + APNs refresh push — done; `/companion` payload and offline map tiles never built), Phase 3 (PIREPs, dropped: the 3a filing + offline queue that shipped was removed in #1024; 3b prompting and 3c live sharing never built). Records which planned designs the shipped code diverged from, plus decisions made and open questions.
 → Full doc: ios-app-roadmap.md
 
 ### ios-app-intents [phase-1 shipped]
@@ -267,7 +267,7 @@ Key exports: `summarize_trip`, `TripSummary`, `TripLegInput`, `FlightTripRow`, `
 → iOS port plan: plans/ios-trips.md
 
 ### pireps
-Crowdsourced pilot weather reports for European airspace (as-built M0/M1): flat `PirepRow` with client UUIDs for idempotent offline submit, optional flight/aircraft links, submit/batch/query API, per-user view/publish flags in `app_prefs_json` (both default-off during beta), burst + daily rate limits where the batch route charges per item, server-enforced European-bounds gate, and anonymise-on-account-deletion. PIREP-linked packs are exempt from *all* retention tiers so the forecast the pilot saw survives with the report.
+Crowdsourced pilot weather reports for European airspace, server side (as-built M0/M1; the client UI was removed in #1024 and the feature dropped, server kept): flat `PirepRow` with client UUIDs for idempotent offline submit, optional flight/aircraft links, submit/batch/query API, per-user view/publish flags in `app_prefs_json` (both default-off during beta), burst + daily rate limits where the batch route charges per item, server-enforced European-bounds gate, and anonymise-on-account-deletion. PIREP-linked packs are exempt from *all* retention tiers so the forecast the pilot saw survives with the report.
 Key exports: `PirepRow`, `validate_european_bounds`, `create_pirep`, `list_pireps`, `can_view_pireps`, `can_publish_pireps`, `api/pireps.py` router
 → Full doc: pireps.md
 

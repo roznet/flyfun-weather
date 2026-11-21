@@ -8,7 +8,7 @@ import OSLog
 /// renders offline. A bundled baseline (`metrics-catalog.json`) covers the very
 /// first run before any sync.
 ///
-/// Modeled on `PirepOfflineStore` (JSON file in the documents directory) but
+/// A JSON file in the documents directory, but
 /// `@MainActor @Observable` like `UserPreferencesStore` so SwiftUI views can read
 /// the catalog synchronously. The raw server bytes are persisted verbatim (the
 /// payload is ~100 KB+ — too large for `UserDefaults`); the `ETag` rides in

@@ -4,7 +4,7 @@
 
 The app is built in three major phases, each delivering standalone value. The architecture (MVVM + Repository) is designed so each phase extends the previous without rewrites.
 
-> Status note: this is the original forward-looking roadmap. Several details below describe *intended* design that the shipped code diverged from — corrections are inlined. Notably the app does **not** use SwiftData (caching is file-based via `BriefingCacheStore` + `FileManager`); the `/companion` payload endpoint of Phase 2 was **never built** (the app caches the normal API responses instead); the shipped iOS PIREP feature is **flight-linked only** (no standalone PIREP, no community feed/map) and is gated by two server-side per-user flags, `pirep_can_view` / `pirep_can_publish`; PIREP `source` is the string `"inflight"` (not the planned `.standalone`/`.manual` enum); and PIREP server routes live at `/api/pireps` (batch at `/api/pireps/batch`), not `/api/observations`. APNs push has since shipped, but for *refresh-complete* deep-links (`Services/PushNotifications.swift`), not for PIREPs. App Intents / Siri Shortcuts also shipped (`AppIntents/`) — but note that is a briefing-navigation surface, NOT the voice-PIREP filing envisioned in 3a below (still unbuilt). The richer community/standalone PIREP surface (query by airport/bounds/radius, hazard + severity + altitude filters) currently lives on the **web/server** side (`api/pireps.py`, `web/pireps.html`), not in the app. See [Overview](./ios-app-overview.md) for the authoritative current status.
+> Status note: this is the original forward-looking roadmap. Several details below describe *intended* design that the shipped code diverged from — corrections are inlined. Notably the app does **not** use SwiftData (caching is file-based via `BriefingCacheStore` + `FileManager`); the `/companion` payload endpoint of Phase 2 was **never built** (the app caches the normal API responses instead); the iOS PIREP feature that shipped was **flight-linked only** (no standalone PIREP, no community feed/map) and was gated by two server-side per-user flags, `pirep_can_view` / `pirep_can_publish`; PIREP `source` is the string `"inflight"` (not the planned `.standalone`/`.manual` enum); and PIREP server routes live at `/api/pireps` (batch at `/api/pireps/batch`), not `/api/observations`. APNs push has since shipped, but for *refresh-complete* deep-links (`Services/PushNotifications.swift`), not for PIREPs. App Intents / Siri Shortcuts also shipped (`AppIntents/`) — but note that is a briefing-navigation surface, NOT the voice-PIREP filing envisioned in 3a below (still unbuilt). The richer community/standalone PIREP query surface (airport/bounds/radius, hazard + severity + altitude filters) lives on the server (`api/pireps.py`). **Phase 3 PIREPs are dropped:** the owner decided not to pursue them, and the PIREP client UI was removed from iOS, Android and web in #1024 (server API kept). See [Overview](./ios-app-overview.md) for the authoritative current status.
 
 The ultimate goal is the PIREP system (Phase 3) — the two-way weather conversation that makes this app uniquely valuable. Phases 1 and 2 build the foundation and deliver value along the way.
 
@@ -74,15 +74,13 @@ Shipped `CrossSectionLayerProtocol` conformers (`Views/CrossSection/Layers/`, 15
 - **Push notifications** ✅ (shipped — `Services/PushNotifications.swift`, `AppDelegate`) — remote-notification registration, device-token upload to `api/devices.py`, refresh-complete push deep-links into the flight via `PushSupport.pendingNavigation(from:)`, silent content-available badge-sync. Server-side push off by default (`APNS_*` env + migration). See [Briefing Refresh Notifications](./ios-app-briefing-notifications.md)
 - **Offline map tiles** ❌ **not built** — no MapKit tile caching anywhere in the app. The route map degrades to whatever iOS happens to have cached when offline. Still a live gap if in-flight map use matters
 
-## Phase 3 — In-Flight PIREP System 🚧 (3a partially shipped in app)
+## Phase 3 — In-Flight PIREP System (dropped; client UI removed in #1024)
 
 **Goal**: The killer feature — pilots report weather during flight, two-way conversation. PIREPs stored locally, synced when online, shared in real-time with connectivity.
 
 Three sub-phases, each delivering incremental value.
 
-> Shipped in the app so far (3a subset): GPS tracking (`FlightTrackingService`, projects position onto the route), the report card (`PirepReportingView` + `PirepViewModel`, one-tap severity, no pre-selected values to avoid confirmation bias), an offline queue (`PirepOfflineStore`, per-user JSON file `pending_pireps.json`) that batch-syncs via the server's `POST /api/pireps/batch` with client UUIDs for dedup, and a per-flight PIREP tab (`PirepListView`). All shipped reports are flight-linked with `source = "inflight"`. Standalone filing, community feed/map, voice/Siri, prompting engine (3b), and live sharing (3c) are NOT in the app.
->
-> Two gates to know before touching this: **filing is no longer restricted to the in-flight window** (a PIREP is a position report — the reporting sheet is reachable from the briefing at any time), and both filing and viewing are **server-side per-user permissions** (`pirep_can_publish` / `pirep_can_view`, mirrored onto `UserPreferences`). A publish-only account 403s on the list query, so the container skips `loadPireps()` rather than stranding the tab on an error.
+> Status: dropped. The 3a subset that shipped (report sheet `PirepReportingView`/`PirepViewModel`, per-flight PIREPs tab `PirepListView`, offline queue `PirepOfflineStore` batch-syncing via `POST /api/pireps/batch`, gated by `pirep_can_publish` / `pirep_can_view`) was hidden in #661 and removed in #1024; the server routes and flags stay. GPS tracking (`FlightTrackingService`) is kept and now serves live position and the Observed tab. Standalone filing, community feed/map, voice/Siri, prompting engine (3b) and live sharing (3c) were never built.
 
 ### Phase 3a — PIREP Filing + Offline Sync
 
@@ -110,17 +108,17 @@ Pilots can file PIREPs in two contexts: during an active flight session (linked 
   - Current position, altitude, GS, track
   - Route progress: projects GPS position onto the route (`ProjectedPosition`: along-route distance, cross-track distance, on-route within 10nm)
 
-- **In-flight report UI** (shipped — `PirepReportingView` / `PirepViewModel`)
-  - Report sheet reached from the briefing toolbar, the flight-list context menu, or the PIREPs tab's persistent "Report a PIREP" bar — **no flight-session or in-flight-window requirement** (deliberate: see the gates note above)
+- **In-flight report UI** (shipped, removed in #1024 — `PirepReportingView` / `PirepViewModel`)
+  - Report sheet reached from the briefing toolbar, the flight-list context menu, or the PIREPs tab's persistent "Report a PIREP" bar — **no flight-session or in-flight-window requirement** (deliberate)
   - One-tap severity buttons, fields start **unset** (no forecast pre-population — deliberately avoids confirmation bias); GPS altitude auto-filled when vertical accuracy is valid
   - Smart field ordering (`PirepField`), optional free-text remarks
   - Saved with `source = "inflight"` (string, not the planned `.manual` enum)
 
-- **Observation timeline** (partly shipped as the PIREPs tab)
+- **Observation timeline** (partly shipped as the PIREPs tab, removed in #1024)
   - `PirepListView` — per-flight list, expandable rows with severity bars, hazard icons, own-badge
   - ❌ No amend flow, and ❌ PIREPs are **not** drawn on the route map
 
-- **Offline sync engine** (shipped — `PirepOfflineStore`, simpler than originally specced)
+- **Offline sync engine** (shipped, removed in #1024 — `PirepOfflineStore`, simpler than originally specced)
   - Unsent reports persisted to a JSON file (`pending_pireps.json`) via an `actor` queue
   - Flushed by `sync(using:)` after a submit (`PirepViewModel`) and on app foreground (`AppState.syncPendingPireps`, triggered from `WeatherBriefApp` scenePhase) — no `syncStatus` enum, no exponential backoff, and no 50-chunk batching yet. The app *does* have an `NWPathMonitor` (`Services/NetworkMonitor.swift`, used by the flight-list/briefing VMs), but the PIREP queue is **not** wired to it, so there is no auto-flush on connectivity restore
   - Idempotent: client UUIDs (`client_uuid`), server dedupes; entire queue POSTed via `submitPirepsBatch` → `POST /api/pireps/batch`, cleared on success

@@ -43,7 +43,7 @@ Also consumed by the app, documented with their own subsystems rather than here:
 `/api/flights/{id}/debrief` (GET/PUT/DELETE), `/api/devices` (APNs registration),
 `/api/messages`, `/api/help/catalog`, `/api/maps/forecast[/days]`,
 `/api/nav/airports-db`, `/api/aircraft`, `/api/user/{preferences,profiles,usage}`,
-`/api/feedback`, `/api/pireps`.
+`/api/feedback`. (`/api/pireps` is no longer called: the PIREP client UI was removed in #1024.)
 
 ### Editing a flight: PATCH vs move (#552)
 
@@ -214,6 +214,8 @@ Implementation notes (`packs.py::get_bundle`):
 - Unlike the originally-envisioned curated companion, the bundle is the *full* pack snapshot, not a derived-analysis-only subset.
 
 ## Phase 3 — PIREPs (DONE, reduced scope)
+
+> Status: the owner dropped PIREPs and the client UI (iOS, Android, web) was removed in #1024. The server side below is kept as is; no client calls it.
 
 Shipped as **PIREPs** at `/api/pireps` (`api/pireps.py`), NOT the `/api/observations` + sessions + WebSocket design originally sketched. PIREPs are top-level entities, optionally linked to a flight via `pack_id`. There are **no flight sessions, no `/sessions` endpoints, no WebSocket live-push, and no server-side `/verification` endpoint** in this module — that part of the vision was descoped. (Verification has a separate, unrelated archive in `db/models.py` — `VerificationObservationRow` etc. — not exposed here.)
 

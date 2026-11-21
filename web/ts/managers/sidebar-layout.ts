@@ -26,7 +26,7 @@ export const NAV_GROUPS: { title: string; keys: string[] }[] = [
   // Flight-day reading order, the same as the iOS Observed tab (#690): what
   // you need to know first, then the route picture, then the detail by
   // source. 'Since this briefing' stays a page-level banner on web.
-  { title: 'Observations', keys: ['debrief', 'observed-glance', 'observed-ribbon', 'observed', 'observations', 'sigmets', 'pireps', 'alternates'] },
+  { title: 'Observations', keys: ['debrief', 'observed-glance', 'observed-ribbon', 'observed', 'observations', 'sigmets', 'alternates'] },
   { title: 'Discussion', keys: ['synopsis', 'dwd-charts', 'dwd-overview', 'gramet'] },
   { title: 'Detail', keys: ['sounding', 'comparison'] },
 ];
@@ -39,7 +39,6 @@ const NAV_LABELS: Record<string, string> = {
   'observed': 'Radar & lightning',
   'observations': 'METAR / TAF',
   'sigmets': 'SIGMETs',
-  'pireps': 'PIREPs',
   'alternates': 'Weather alternates',
   'synopsis': 'Synopsis',
   'dwd-charts': 'Surface pressure & fronts',
