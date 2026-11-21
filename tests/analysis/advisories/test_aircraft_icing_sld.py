@@ -258,6 +258,10 @@ def test_solver_cache_returns_the_same_cost(live):
 
 
 def test_unknown_mode_warns_and_shadows(monkeypatch, caplog):
+    # The warning fires once per process per value: start from an empty memory
+    # so the test does not depend on what ran before it.
+    from weatherbrief.analysis.advisories import aircraft_icing
+    monkeypatch.setattr(aircraft_icing, "_warned_sld_modes", set())
     monkeypatch.setenv(SLD_MODE_ENV, "liv")
     assert sld_icing_mode() == "shadow"
     assert "liv" in caplog.text
