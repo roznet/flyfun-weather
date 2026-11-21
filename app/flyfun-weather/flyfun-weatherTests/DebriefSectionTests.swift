@@ -36,6 +36,20 @@ import Foundation
         #expect((r.summary?.lines.count ?? 0) == 5)
     }
 
+    /// A field missing from the server costs that field, not the whole section
+    /// (Android's DTO defaults the same fields).
+    @Test func aReportMissingFieldsStillDecodes() throws {
+        let json = #"{"status":"ok","summary":{"headline":"Smooth"},"questions":[{"id":"icing-1-2","answer":{"answer":"none"}}]}"#
+        let r = try JSONDecoder.weatherBrief.decode(DebriefReport.self, from: Data(json.utf8))
+        #expect(r.headline == "Smooth")
+        #expect(r.summary?.lines.isEmpty == true)
+        #expect(r.questions.first?.options.isEmpty == true)
+        #expect(r.questions.first?.avoidable == false)
+        #expect(r.questions.first?.answer?.avoided == false)
+        let bare = try JSONDecoder.weatherBrief.decode(DebriefReport.self, from: Data(#"{"status":"not_recorded"}"#.utf8))
+        #expect(bare.questions.isEmpty)
+    }
+
     @Test func theAnswersBodyIsSnakeCaseAndAClearOmitsTheAnswer() throws {
         let body = DebriefAnswersRequest(answers: [
             .init(questionId: "icing-110-192", answer: "light", avoided: true),

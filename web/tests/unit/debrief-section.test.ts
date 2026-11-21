@@ -19,7 +19,10 @@ vi.mock('../../ts/adapters/debrief-adapter', () => ({
 }));
 
 import type { DebriefReport, DebriefResponse } from '../../ts/store/types';
-import { debriefSectionHtml, sectionDecision, type DebriefSectionState } from '../../ts/components/debrief-section';
+import {
+  debriefSectionHtml, mountDebriefSection, sectionDecision, type DebriefSectionState,
+} from '../../ts/components/debrief-section';
+import { fetchDebriefReport, saveDebrief } from '../../ts/adapters/debrief-adapter';
 
 const FIXTURE = resolve(__dirname, '../../../app/fixtures/api/debrief-report.json');
 const report = (): DebriefReport => JSON.parse(readFileSync(FIXTURE, 'utf8')) as DebriefReport;
@@ -90,5 +93,49 @@ describe('debrief section', () => {
     const html = debriefSectionHtml(state({ debrief: debrief() })).toLowerCase();
     expect(html).not.toContain('no-go');
     expect(html).not.toContain('verdict');
+  });
+});
+
+/** A host with just what `mountDebriefSection` touches: the listeners, the
+ *  note textarea's value, and `innerHTML`. `click` fires a button tap. */
+function stubHost(noteValue: string) {
+  const listeners: Record<string, (ev: Event) => void> = {};
+  const host = {
+    innerHTML: '',
+    addEventListener: (type: string, fn: (ev: Event) => void) => { listeners[type] = fn; },
+    removeEventListener: () => {},
+    querySelector: (sel: string) => (sel === '.debrief-note' ? { value: noteValue } : null),
+  };
+  const click = (dataset: Record<string, string>) => {
+    const button = { dataset, classList: { contains: () => false } };
+    listeners.click({ target: { closest: () => button } } as unknown as Event);
+  };
+  return { host: host as unknown as HTMLElement, click };
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+describe('debrief section saves', () => {
+  it('flipping the decision keeps a note typed but not yet saved', async () => {
+    vi.mocked(saveDebrief).mockResolvedValue(debrief({ decision: 'cancelled', note: 'typed' }));
+    vi.mocked(fetchDebriefReport).mockResolvedValue(report());
+    const { host, click } = stubHost('typed');
+    mountDebriefSection(host, 'f', { report: report(), debrief: debrief({ note: 'stored' }) });
+    click({ decision: 'cancelled' });
+    await flush();
+    expect(vi.mocked(saveDebrief).mock.calls.at(-1)?.[1]).toMatchObject({ decision: 'cancelled', note: 'typed' });
+  });
+
+  it('a failed report refetch after a stored decision is not shown as a failed save', async () => {
+    vi.mocked(saveDebrief).mockResolvedValue(debrief({ decision: 'cancelled' }));
+    vi.mocked(fetchDebriefReport).mockRejectedValue(new Error('offline'));
+    const onChanged = vi.fn();
+    const { host, click } = stubHost('');
+    mountDebriefSection(host, 'f', { report: report(), debrief: debrief() }, onChanged);
+    click({ decision: 'cancelled' });
+    await flush();
+    expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ decision: 'cancelled' }));
+    expect(host.innerHTML).not.toContain('data-testid="debrief-error"');
+    expect(host.innerHTML).toContain('data-testid="debrief-reason"');
   });
 });
