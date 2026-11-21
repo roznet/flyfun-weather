@@ -254,7 +254,7 @@ def test_digest_prints_the_zones_the_card_graded(sample_route):
         "icing_method": "ogimet_nwp", "cloud_source": "nwp", "convective_method": "nwp",
     })
     ctx = build_digest_context(snapshot, target_time, route_advisories=graded)
-    assert "Icing zone [ecmwf]: moderate mixed 2467-3949ft" in ctx
+    assert "Icing zone [ECMWF]: moderate mixed 2467-3949ft" in ctx
     assert "1609-2609ft" not in ctx
 
     # A manifest from before #1013 keeps the stored zones (old prompt exactly).

@@ -6,6 +6,7 @@ from datetime import datetime
 
 from weatherbrief.analysis.airport_conditions import format_wind_string
 from weatherbrief.digest.format_utils import format_flight_level, terminal_proxy_lines, terminal_roles
+from weatherbrief.fetch.variables import model_short_label
 from weatherbrief.models import (
     AgreementLevel,
     ALT_AXIS_LABELS,
@@ -122,10 +123,10 @@ def _format_waypoint_forecast(
     lines = []
     hourly = wf.at_time(target_time)
     if not hourly:
-        lines.append(f"  [{wf.model.value}] No data near target time")
+        lines.append(f"  [{model_short_label(wf.model.value)}] No data near target time")
         return lines
 
-    lines.append(f"  [{wf.model.value}] at {hourly.time.strftime('%Y-%m-%d %H:%MZ')}:")
+    lines.append(f"  [{model_short_label(wf.model.value)}] at {hourly.time.strftime('%Y-%m-%d %H:%MZ')}:")
 
     # Surface
     parts = []
@@ -200,9 +201,9 @@ def _format_waypoint_analysis(analysis: WaypointAnalysis) -> list[str]:
         lines.append("  Wind analysis:")
         for model, wc in analysis.wind_components.items():
             if wc.headwind_kt > 0:
-                lines.append(f"    [{model}] {wc.headwind_kt:.0f}kt headwind, {abs(wc.crosswind_kt):.0f}kt crosswind")
+                lines.append(f"    [{model_short_label(model)}] {wc.headwind_kt:.0f}kt headwind, {abs(wc.crosswind_kt):.0f}kt crosswind")
             else:
-                lines.append(f"    [{model}] {abs(wc.headwind_kt):.0f}kt tailwind, {abs(wc.crosswind_kt):.0f}kt crosswind")
+                lines.append(f"    [{model_short_label(model)}] {abs(wc.headwind_kt):.0f}kt tailwind, {abs(wc.crosswind_kt):.0f}kt crosswind")
 
     # Sounding-based analysis
     if analysis.sounding:
@@ -229,7 +230,7 @@ def _format_altitude_advisories(adv: AltitudeAdvisories) -> list[str]:
     for model, regimes in adv.regimes.items():
         non_clear = [r for r in regimes if r.label != "Clear"]
         if non_clear:
-            lines.append(f"  Vertical profile [{model}]:")
+            lines.append(f"  Vertical profile [{model_short_label(model)}]:")
             for r in regimes:
                 lines.append(f"    {r.floor_ft:.0f}-{r.ceiling_ft:.0f}ft: {r.label}")
 
@@ -240,7 +241,7 @@ def _format_altitude_advisories(adv: AltitudeAdvisories) -> list[str]:
         if advisory.per_model_ft:
             model_parts = []
             for m, alt in advisory.per_model_ft.items():
-                model_parts.append(f"{m}={alt:.0f}ft" if alt is not None else f"{m}=N/A")
+                model_parts.append(f"{model_short_label(m)}={alt:.0f}ft" if alt is not None else f"{model_short_label(m)}=N/A")
             lines.append(f"    Per model: {', '.join(model_parts)}")
 
     return lines
@@ -264,13 +265,13 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
             if idx.k_index is not None:
                 idx_parts.append(f"KI {idx.k_index:.0f}")
             if idx_parts:
-                lines.append(f"  Indices [{model}]: {', '.join(idx_parts)}")
+                lines.append(f"  Indices [{model_short_label(model)}]: {', '.join(idx_parts)}")
 
         # Convective assessment
         if sa.convective and sa.convective.risk_level != ConvectiveRisk.NONE:
             conv = sa.convective
             regime = f" [{conv.regime.label}]" if conv.regime else ""
-            lines.append(f"  Convective [{model}]: {conv.risk_level.value.upper()}{regime}")
+            lines.append(f"  Convective [{model_short_label(model)}]: {conv.risk_level.value.upper()}{regime}")
             for drv in conv.drivers:
                 lines.append(f"    + {drv}")
             for sup in conv.suppressors:
@@ -285,7 +286,7 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
             for zone in icing_zones:
                 sld_str = " SLD!" if zone.sld_risk else ""
                 lines.append(
-                    f"  Icing [{model}]: {zone.risk.value} {zone.icing_type.value} "
+                    f"  Icing [{model_short_label(model)}]: {zone.risk.value} {zone.icing_type.value} "
                     f"{zone.base_ft:.0f}-{zone.top_ft:.0f}ft "
                     f"(Tw={zone.mean_wet_bulb_c:.0f}C){sld_str}"
                 )
@@ -299,7 +300,7 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
             if precip.total_mm:
                 precip_parts.append(f" {precip.total_mm:.1f}mm/h")
             precip_parts.append(")")
-            lines.append(f"  Precipitation [{model}]: {''.join(precip_parts)}")
+            lines.append(f"  Precipitation [{model_short_label(model)}]: {''.join(precip_parts)}")
             if precip.precipitation_zones:
                 zone_strs = []
                 for zone in precip.precipitation_zones:
@@ -321,7 +322,7 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
             vm_parts = [vm.classification.value.replace("_", " ").title()]
             if vm.max_w_fpm is not None:
                 vm_parts.append(f"max {vm.max_w_fpm:+.0f} ft/min at {vm.max_w_level_ft:.0f}ft")
-            lines.append(f"  Vertical motion [{model}]: {', '.join(vm_parts)}")
+            lines.append(f"  Vertical motion [{model_short_label(model)}]: {', '.join(vm_parts)}")
             if vm.cat_risk_layers:
                 for layer in vm.cat_risk_layers:
                     bl_note = " (BL)" if layer.boundary_layer else ""
@@ -337,14 +338,14 @@ def _format_sounding_analysis(soundings: dict[str, SoundingAnalysis]) -> list[st
         if sa.cloud_layers:
             for cl in sa.cloud_layers:
                 lines.append(
-                    f"  Cloud [{model}]: {cl.coverage.value.upper()} "
+                    f"  Cloud [{model_short_label(model)}]: {cl.coverage.value.upper()} "
                     f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft "
                     f"(T={cl.mean_temperature_c:.0f}C)" if cl.mean_temperature_c is not None
-                    else f"  Cloud [{model}]: {cl.coverage.value.upper()} "
+                    else f"  Cloud [{model_short_label(model)}]: {cl.coverage.value.upper()} "
                     f"{cl.base_ft:.0f}-{cl.top_ft:.0f}ft"
                 )
         elif not icing_zones:
-            lines.append(f"  [{model}]: Clear, no icing")
+            lines.append(f"  [{model_short_label(model)}]: Clear, no icing")
 
     return lines
 
@@ -542,7 +543,7 @@ def _format_model_agreement(snapshot: ForecastSnapshot) -> list[str]:
                 # A model absent at the point reads back as None on pack
                 # round-trips (#202) — render "N/A", don't format None as float.
                 models_str = ", ".join(
-                    f"{k}={v:.1f}" if v is not None else f"{k}=N/A"
+                    f"{model_short_label(k)}={v:.1f}" if v is not None else f"{model_short_label(k)}=N/A"
                     for k, v in d.model_values.items()
                 )
                 lines.append(f"    POOR {d.variable}: spread {d.spread:.1f} ({models_str})")

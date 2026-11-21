@@ -309,11 +309,11 @@ def test_build_context_nwp_cloud_absent_falls_back_to_bulk(sample_snapshot):
     context = build_digest_context(sample_snapshot, target_time)
 
     assert (
-        "Bulk cloud [gfs] (Open-Meteo summary, no native NWP layer): "
+        "Bulk cloud [GFS] (Open-Meteo summary, no native NWP layer): "
         "Low=81%, Mid=61%, High=100%" in context
     )
     # The bulk triple must NOT be mislabeled as native NWP cloud…
-    assert "NWP cloud [gfs]: Low=" not in context
+    assert "NWP cloud [GFS]: Low=" not in context
     # …and the message must not imply a temporal gap (wrong for always-None models).
     assert "at this lead time" not in context
 
@@ -331,7 +331,7 @@ def test_build_context_nwp_cloud_absent_no_bulk(sample_snapshot):
     target_time = datetime(2026, 2, 17, 9, 0, 0)
     context = build_digest_context(sample_snapshot, target_time)
 
-    assert "NWP cloud [gfs]: no native NWP cloud layer" in context
+    assert "NWP cloud [GFS]: no native NWP cloud layer" in context
     assert "at this lead time" not in context
 
 
@@ -348,7 +348,7 @@ def test_build_context_nwp_cloud_clear(sample_snapshot):
     target_time = datetime(2026, 2, 17, 9, 0, 0)
     context = build_digest_context(sample_snapshot, target_time)
 
-    assert "NWP cloud [gfs]: none (model clear)" in context
+    assert "NWP cloud [GFS]: none (model clear)" in context
 
 
 def test_build_context_nwp_cloud_native_decks(sample_snapshot):
@@ -373,7 +373,7 @@ def test_build_context_nwp_cloud_native_decks(sample_snapshot):
     target_time = datetime(2026, 2, 17, 9, 0, 0)
     context = build_digest_context(sample_snapshot, target_time)
 
-    assert "NWP cloud [gfs]: BKN 3000-8000ft CC=72% T=4C" in context
+    assert "NWP cloud [GFS]: BKN 3000-8000ft CC=72% T=4C" in context
 
 
 def test_build_context_convective_model_scheme_and_cross_check(sample_snapshot):
@@ -397,7 +397,7 @@ def test_build_context_convective_model_scheme_and_cross_check(sample_snapshot):
     target_time = datetime(2026, 2, 17, 9, 0, 0)
     context = build_digest_context(sample_snapshot, target_time)
 
-    assert "Convective model scheme [gfs]" in context
+    assert "Convective model scheme [GFS]" in context
     assert "cover=0%" in context
     assert "cross-check:" in context
     assert "Thermo Convective shows" in context
@@ -422,7 +422,7 @@ def test_build_context_convective_cross_check_when_thermo_none(sample_snapshot):
     target_time = datetime(2026, 2, 17, 9, 0, 0)
     context = build_digest_context(sample_snapshot, target_time)
 
-    assert "Convective model scheme [gfs]" in context
+    assert "Convective model scheme [GFS]" in context
     assert "cover=40%" in context
     assert "cross-check:" in context
     assert "NWP Convective shows convection" in context
