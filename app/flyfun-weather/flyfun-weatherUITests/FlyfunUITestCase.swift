@@ -90,11 +90,14 @@ class FlyfunUITestCase: XCTestCase {
     /// (Advisory / Cross-Section / …) render as buttons on both idioms — an
     /// iPhone bottom `Tab`, an iPad top tab bar — so this is the idiom-agnostic
     /// "briefing loaded" signal (replaces keying off localized header text).
-    /// Keyed on Advisory, which is the first tab and so never paginated away.
+    /// Keyed on Advisory, the first tab, or Observed: a briefing that opens on
+    /// Observed (a flight-day or debrief open, #1024) pages a narrow iPad tab
+    /// bar to its end, which leaves Advisory behind "Previous Page".
     @MainActor
     func waitForBriefingLoaded(_ app: XCUIApplication) {
-        XCTAssertTrue(app.buttons["Advisory"].firstMatch.waitForExistence(timeout: Self.uiTimeout),
-                      "the briefing (with its Advisory tab) should be shown")
+        let tab = app.buttons.matching(NSPredicate(format: "label IN %@", ["Advisory", "Observed"])).firstMatch
+        XCTAssertTrue(tab.waitForExistence(timeout: Self.uiTimeout),
+                      "the briefing (with its Advisory or Observed tab) should be shown")
     }
 
     /// Open `fixture-1`'s briefing: reveal the list, tap the seeded flight, and
