@@ -20,11 +20,19 @@ build, so each flight is handled at most once and gets at most one push.
   on and the user has a device.
 
 ``WB_DEBRIEF_PUSH=1`` turns the send on (the row reads ``pending`` until the
-send returns ``sent`` or ``failed``); unset, every decision is logged
-(``DEBRIEF_PUSH_WOULD_SEND`` / ``DEBRIEF_PUSH_SKIPPED``) and stored as
-``shadow``. A flight whose build raises gets no row and is retried each
-cycle until it leaves :data:`LOOKBACK`, logged at error level. It stays off until the Debrief section (#1024) is on both stores,
-so the push lands somewhere.
+send returns: ``sent`` when it reached at least one device, else
+``failed``); unset, every decision is logged (``DEBRIEF_PUSH_WOULD_SEND`` /
+``DEBRIEF_PUSH_SKIPPED``) and stored as ``shadow``. Leave the flag unset
+until the Debrief section (#1024) is on both stores, so the push lands
+somewhere.
+
+A flight whose build raises gets no row and is retried each cycle until it
+leaves :data:`LOOKBACK`, logged at error level.
+
+The query's ``departure_time`` lower bound allows a flight up to 24 h long
+(plus the after-window and the latest take-off delay): a longer one closes
+after the query stopped looking and never gets a row here (its report is
+still built on request).
 
 :data:`LOOKBACK` bounds the first run after a deploy: flights that closed
 before it never get a report row from here (their report is still built on

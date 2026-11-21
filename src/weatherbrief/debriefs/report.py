@@ -1074,12 +1074,22 @@ def report_for_flight(db, flight_id: str, *, now: datetime | None = None) -> dic
             locator = for_route(route)
         except Exception:
             logger.warning("Locator failed for %s", flight_id, exc_info=True)
-    from weatherbrief.storage.debriefs import load_answers
+    from weatherbrief.storage.debriefs import get_report_row, load_answers
 
+    answers = load_answers(db, flight_id)
     report = build_report(recap, lane=lane, manifest=manifest, history=history, progress=progress,
-                          route=route, locator=locator, answers=load_answers(db, flight_id),
+                          route=route, locator=locator, answers=answers,
                           proxies=load_proxies(flight_dir))
     report["flight_id"] = flight_id
+    # After window close the questions are the set stored then: the list
+    # flags, the agents' summary and the answers PUT all count against it,
+    # so a rebuild that would now ask a different set (newer live history,
+    # rules change) never shows or accepts a question that was not asked.
+    stored = get_report_row(db, flight_id)
+    if stored is not None:
+        asked = {q["id"] for q in json.loads(stored.questions_json or "[]")}
+        report["questions"] = [q for q in report.get("questions") or [] if q["id"] in asked]
+        report = with_answers(report, answers)
     return report
 
 

@@ -87,7 +87,11 @@ flight's outcomes are re-derived from the answers and the sent `outcomes` ignore
 as they are, marked, since their "consistent" defaults are biased.
 
 The report itself is never stored whole: `GET /debrief/report` rebuilds it on each call. The
-report row keeps only what the list, agents and push need.
+report row keeps only what the list, agents and push need. Once that row exists, the rebuilt
+report keeps only the questions stored in it (`report_for_flight`), so the report, the answers
+PUT (404 otherwise), `questions_open` and the agents' summary count against one set even if newer
+live history or a rules change would now ask another. Answers upsert on `(flight_id,
+question_id)`: a concurrent insert (app retry, double tap) becomes an update, never a 500.
 
 ## Window close and push
 

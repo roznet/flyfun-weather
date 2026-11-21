@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import (
@@ -245,10 +246,22 @@ def save_answers(
             forecast_json=json.dumps(question.get("forecast")) if question.get("forecast") else None,
         )
         if row is None:
-            db.add(FlightDebriefAnswerRow(flight_id=flight_id, question_id=question["id"], **fields))
-        else:
-            for k, v in fields.items():
-                setattr(row, k, v)
+            # A concurrent PUT (app retry, double tap) may insert the same
+            # (flight, question) first: the savepoint turns that unique-key
+            # clash into an update of its row instead of a 500.
+            try:
+                with db.begin_nested():
+                    db.add(FlightDebriefAnswerRow(flight_id=flight_id, question_id=question["id"], **fields))
+                continue
+            except IntegrityError:
+                row = db.execute(
+                    select(FlightDebriefAnswerRow).where(
+                        FlightDebriefAnswerRow.flight_id == flight_id,
+                        FlightDebriefAnswerRow.question_id == question["id"],
+                    )
+                ).scalar_one()
+        for k, v in fields.items():
+            setattr(row, k, v)
     db.flush()
     current = db.get(FlightDebriefRow, flight_id)
     remaining = db.execute(

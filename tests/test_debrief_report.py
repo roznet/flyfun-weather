@@ -578,3 +578,83 @@ def test_find_closed_flights_takes_each_window_once(app_db, past_flight, monkeyp
     assert debrief_close.find_closed_flights(s, closes - timedelta(minutes=10)) == []
     assert debrief_close.find_closed_flights(s, closes + debrief_close.LOOKBACK + timedelta(minutes=1)) == []
     s.close()
+
+
+# --- Follow-up to #1025 -------------------------------------------------------------
+
+
+def test_after_window_close_the_report_asks_only_the_stored_questions(client, past_flight, app_db, monkeypatch):
+    """A rebuild that would now ask another question (newer live history,
+    rules change) neither shows nor accepts it once the window-close row
+    stored the set: list flags, summary and answers agree."""
+    from weatherbrief.db.models import FlightDebriefReportRow
+    from weatherbrief.debriefs import report as report_mod
+
+    other = {**_Q, "id": "icing-120-150"}
+
+    def fake_build(recap, *, answers, **kw):
+        return {"status": "ok", "cancelled": False,
+                "questions": [{**q, "answer": answers.get(q["id"])} for q in (_Q, other)],
+                "summary": {"headline": "x", "differs_from_forecast": False},
+                "interest": {"interesting": True, "reasons": []}}
+
+    monkeypatch.setattr(report_mod, "build_report", fake_build)
+    url = f"/api/flights/{past_flight.id}/debrief"
+    assert [q["id"] for q in client.get(f"{url}/report").json()["questions"]] == [_Q["id"], other["id"]]
+
+    s = app_db()
+    s.add(FlightDebriefReportRow(
+        flight_id=past_flight.id, built_at=datetime(2026, 11, 20, 12, tzinfo=UTC), rules_version="1",
+        status="ok", interesting=True, differs_from_forecast=False, reasons_json="[]",
+        questions_json=json.dumps([{"id": _Q["id"], "kind": "icing", "text": _Q["text"]}]),
+        push_outcome="shadow",
+    ))
+    s.commit()
+    s.close()
+    assert [q["id"] for q in client.get(f"{url}/report").json()["questions"]] == [_Q["id"]]
+    r = client.put(f"{url}/answers", json={"answers": [{"question_id": other["id"], "answer": "none"}]})
+    assert r.status_code == 404
+    r = client.put(f"{url}/answers", json={"answers": [{"question_id": _Q["id"], "answer": "none"}]})
+    assert r.status_code == 200 and r.json()["orphan_answers"] == {}
+
+
+def test_save_answers_turns_a_concurrent_insert_into_an_update(app_db, past_flight, monkeypatch):
+    """Two PUTs for the same question: the second read saw no row, the first
+    inserted meanwhile. The unique key clash becomes an update, not a 500."""
+    from sqlalchemy import false
+
+    from weatherbrief.db.models import FlightDebriefAnswerRow
+    from weatherbrief.storage import debriefs as storage
+
+    real_select = storage.select
+    calls = {"n": 0}
+
+    def racing_select(*args):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            other = app_db()
+            storage.save_answers(other, past_flight.id, [(_Q, "light", False, None)], rules_version="1")
+            other.commit()
+            other.close()
+            return real_select(*args).where(false())
+        return real_select(*args)
+
+    s = app_db()
+    monkeypatch.setattr(storage, "select", racing_select)
+    storage.save_answers(s, past_flight.id, [(_Q, "moderate_plus", False, None)], rules_version="1")
+    s.commit()
+    monkeypatch.setattr(storage, "select", real_select)
+    rows = s.query(FlightDebriefAnswerRow).all()
+    assert [r.answer for r in rows] == ["moderate_plus"]
+    s.close()
+
+
+def test_flown_tap_without_answers_counts_flown_but_no_category(client, past_flight):
+    """The section's flown tap before any answer stores empty outcomes: it
+    counts as flown and adds nothing to any category's accuracy, never an
+    "as forecast"."""
+    url = f"/api/flights/{past_flight.id}/debrief"
+    d = client.put(url, json={"decision": "flown", "form": "questions"}).json()
+    assert d["outcomes"] == {} and d["form"] == "questions"
+    stats = client.get("/api/debriefs/stats").json()
+    assert stats["flown_count"] == 1 and stats["category_accuracy"] == {}
