@@ -194,6 +194,12 @@ protocol BriefingRepository: Sendable {
     func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse
     /// Remove a flight's debrief. Idempotent.
     func deleteDebrief(flightId: String) async throws
+    /// The post-flight report (#1023): headline, detail lines, questions with
+    /// their answers. Built by the server on each call.
+    func debriefReport(flightId: String) async throws -> DebriefReport
+    /// Store answers (#1023); the server folds them into the debrief (flown)
+    /// and returns the rebuilt report.
+    func saveDebriefAnswers(flightId: String, request: DebriefAnswersRequest) async throws -> DebriefReport
 
     // Digest feedback (👍/👎 on the AI digest)
     /// Submit a thumb rating (+ optional comment) for a briefing pack's digest.
@@ -218,6 +224,16 @@ extension BriefingRepository {
     }
 
     func chartImage(_ chart: PackChart) async throws -> Data {
+        throw APIError.notFound
+    }
+
+    /// The debrief report (#1024) is served by the online/caching layers;
+    /// test fakes that don't stub it report "no report".
+    func debriefReport(flightId: String) async throws -> DebriefReport {
+        throw APIError.notFound
+    }
+
+    func saveDebriefAnswers(flightId: String, request: DebriefAnswersRequest) async throws -> DebriefReport {
         throw APIError.notFound
     }
 
@@ -629,6 +645,15 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func deleteDebrief(flightId: String) async throws {
         try await client.requestVoid("/api/flights/\(flightId)/debrief")
+    }
+
+    func debriefReport(flightId: String) async throws -> DebriefReport {
+        try await client.request("/api/flights/\(flightId)/debrief/report")
+    }
+
+    func saveDebriefAnswers(flightId: String, request: DebriefAnswersRequest) async throws -> DebriefReport {
+        let body = try JSONEncoder.weatherBrief.encode(request)
+        return try await client.request("/api/flights/\(flightId)/debrief/answers", method: "PUT", body: body)
     }
 
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws {

@@ -53,9 +53,10 @@ enum PushSupport {
         return .briefing(flightId: flightId)
     }
 
-    /// Payload `type`s about what is happening now on flight day: live alerts
-    /// and their clearing (#754), and the flight-day brief (#753).
-    static let observedPushTypes: Set<String> = ["live_alert", "live_clear", "flight_day"]
+    /// Payload `type`s that open the Observed tab: live alerts and their
+    /// clearing (#754), the flight-day brief (#753), and the post-flight
+    /// debrief (#1023), whose section opens that tab after the window (#1024).
+    static let observedPushTypes: Set<String> = ["live_alert", "live_clear", "flight_day", "debrief"]
 
     static func isObservedPush(_ userInfo: [AnyHashable: Any]) -> Bool {
         guard let type = userInfo["type"] as? String else { return false }

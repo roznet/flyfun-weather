@@ -33,6 +33,12 @@ struct ObservedTabView: View {
     var body: some View {
         ScrollSpyScroll(sections: spySections) {
             VStack(alignment: .leading, spacing: Theme.sectionSpacing) {
+                // #1024: after the live window, the Observed tab opens on
+                // the server's debrief report and its questions.
+                if let debrief = viewModel.debriefSection {
+                    DebriefSectionView(viewModel: debrief)
+                        .spyAnchor("debrief")
+                }
                 if let glance = nutshell {
                     VStack(alignment: .leading, spacing: Theme.spacingM) {
                         if let since = offlineSince {
@@ -150,6 +156,7 @@ struct ObservedTabView: View {
         var sections = nutshell == nil && !runwayWindDials.isEmpty
             ? [SpySection("winds", "Winds"), SpySection("glance", "Now")]
             : [SpySection("glance", "Now")]
+        if viewModel.debriefSection != nil { sections.insert(SpySection("debrief", "Debrief"), at: 0) }
         if let glance = nutshell, hasCards(glance) { sections.append(SpySection("airports", "Airports")) }
         if nutshell != nil {
             if viewModel.liveLayerForPack?.ribbon != nil { sections.append(SpySection("ribbon", "Route")) }

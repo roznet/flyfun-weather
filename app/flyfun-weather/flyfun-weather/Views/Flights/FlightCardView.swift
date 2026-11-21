@@ -35,6 +35,7 @@ struct FlightCardView: View, Equatable {
             && lhs.flight.latestBriefing == rhs.flight.latestBriefing
             && lhs.flight.section == rhs.flight.section
             && lhs.flight.debrief == rhs.flight.debrief
+            && lhs.flight.questionsOpen == rhs.flight.questionsOpen
             // The trip badge is a field the body draws, so it belongs here:
             // adding or removing a leg changes position/total without touching
             // any other field, and omitting it would leave "leg 2 of 3" stale
@@ -134,13 +135,12 @@ struct FlightCardView: View, Equatable {
                         .lineLimit(1)
                 }
 
-                // Nudge to debrief a recent flight (server "recent" bucket = a
-                // recent past flight not yet debriefed). Tapping the row opens the
-                // briefing, where the debrief card lives. Also require `isEditable`:
-                // debrief is owner-only, and on the legacy-server date fallback a
-                // subscriber's recent shared flight would otherwise show a nudge
-                // that dead-ends (the briefing's debrief card is owner-gated).
-                if flight.flightSection == .recent && !flight.hasDebrief && flight.isEditable {
+                // Nudge to debrief (#1024): while the server's report has
+                // unanswered questions (`questions_open`), or on a recent past
+                // flight not yet debriefed (the server's "recent" bucket).
+                // Tapping the row opens the briefing, whose Observed tab opens
+                // on the Debrief section. Owner-only (`isEditable`).
+                if flight.needsDebrief {
                     Spacer(minLength: 0)
                     Label("Debrief", systemImage: "square.and.pencil")
                         .font(.caption2.weight(.semibold))

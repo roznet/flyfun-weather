@@ -137,6 +137,14 @@ final class BriefingViewModel {
     /// reload and survives tab switches (this view model outlives the tab views).
     private(set) var debrief: DebriefResponse?
 
+    /// The Debrief section on the Observed tab (#1024): created once the live
+    /// window has closed (or the server says the report is built), for the
+    /// owner only. Nil before — and the Observed tab is then only offered when
+    /// it has measurements.
+    private(set) var debriefSection: DebriefSectionViewModel?
+    /// A load in flight (the open and a push can both ask): only one runs.
+    @ObservationIgnored private var debriefSectionLoading = false
+
     // Section states
     private(set) var advisoriesState: LoadingState<AdvisoriesResponse> = .idle
     private(set) var digestState: LoadingState<DigestResponse> = .idle
@@ -251,6 +259,40 @@ final class BriefingViewModel {
         self.debrief = debrief
     }
 
+    /// Whether the flight is due its Debrief section (#1024): owner, and the
+    /// server built the report at window close or the live window is over.
+    func wantsDebriefSection(now: Date = Date()) -> Bool {
+        guard flight.isEditable else { return false }
+        return flight.debriefReady == true
+            || flight.hasLiveObservationWindowEnded(now: now, started: isStartedNotLanded())
+    }
+
+    /// Load the Debrief section once, when the flight is due it. The report is
+    /// the server's (`/debrief/report`); a save feeds the Advisory card and
+    /// `onSaved` (the flights list re-sync).
+    func loadDebriefSection(taxonomy: DebriefTaxonomy,
+                            onSaved: (@MainActor (DebriefResponse?) -> Void)? = nil) async {
+        guard debriefSection == nil, !debriefSectionLoading, wantsDebriefSection() else { return }
+        debriefSectionLoading = true
+        defer { debriefSectionLoading = false }
+        let section = DebriefSectionViewModel(flightId: flight.id, debrief: debrief, taxonomy: taxonomy,
+                                              repository: repository)
+        await section.load()
+        guard section.report != nil else { return }
+        section.onSaved = { [weak self] saved in
+            if let saved { self?.setDebrief(saved) }
+            onSaved?(saved)
+        }
+        debriefSection = section
+        reconcileTabs()
+        // Once per open, like the flight-day default: questions still open
+        // land the pilot on them. A deep link that moved off Advisory wins.
+        if selectedTab == .advisory, section.questions.contains(where: { $0.answer == nil }),
+           section.decision != .cancelled {
+            selectedTab = .observed
+        }
+    }
+
     // MARK: - Deep-link focus (§4.6/§4.7/§4.9)
 
     /// Apply a deep-link intent: select the model, resolve and set the shared
@@ -294,6 +336,9 @@ final class BriefingViewModel {
     /// METAR/TAF along the route, a matched SIGMET or radar/lightning/satellite
     /// samples — so the Observed tab is offered.
     var showsObservedTab: Bool {
+        // #1024: after the window the tab opens on the Debrief section, even
+        // when nothing was measured.
+        if debriefSection != nil { return true }
         guard case .loaded(let snapshot) = snapshotState else { return false }
         return Self.hasObservedContent(snapshot)
     }

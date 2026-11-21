@@ -53,7 +53,7 @@ struct PushSupportTests {
 
     // MARK: - Flight-day pushes (#754)
 
-    @Test(arguments: ["live_alert", "live_clear", "flight_day"])
+    @Test(arguments: ["live_alert", "live_clear", "flight_day", "debrief"])
     func flightDayPushOpensObserved(type: String) {
         let userInfo: [AnyHashable: Any] = [
             "flight_id": "zz-test-flight", "type": type,

@@ -13,12 +13,6 @@ import SwiftUI
 /// Watch items live on the Discussion tab only.
 struct AdvisoryTabView: View {
     let viewModel: BriefingViewModel
-    @Environment(AppState.self) private var appState
-    /// Held in `@State` and created once (in the card's action) so a parent
-    /// `body` re-render — frequent during the SSE refresh stream — can't
-    /// re-allocate it and wipe in-progress form input. `.sheet(item:)` presents
-    /// while it's non-nil.
-    @State private var debriefVM: DebriefViewModel?
 
     var body: some View {
         ScrollSpyScroll(sections: spySections) {
@@ -58,39 +52,6 @@ struct AdvisoryTabView: View {
             .padding(.vertical, Theme.cardPadding)
         }
         .background(Theme.bg)
-        .sheet(item: $debriefVM) { vm in
-            DebriefFormView(viewModel: vm, onFinished: { saved in
-                viewModel.setDebrief(saved)
-                // Re-sync the flights list so the "Debriefed ✓" glyph and the
-                // Recent-debrief nudge update — the list VM persists across
-                // navigation, so it won't otherwise re-fetch until foreground.
-                appState.signalExternalSync(flightId: viewModel.flight.id)
-            })
-        }
-    }
-
-    /// Build the debrief view model once, at tap time, from the current flagged
-    /// categories — then present it via `$debriefVM`. A fresh add is only reached
-    /// once advisories are terminal (the button is disabled otherwise), so
-    /// `flaggedTagIds` is trustworthy here; the guard is belt-and-suspenders.
-    private func presentDebrief() {
-        guard let repo = appState.repository else { return }
-        guard viewModel.debrief != nil || advisoriesReady else { return }
-        debriefVM = DebriefViewModel(
-            flight: flightForDebrief,
-            taxonomy: appState.helpCatalog.debriefTaxonomy,
-            flaggedTagIds: flaggedTagIds,
-            repository: repo
-        )
-    }
-
-    /// The flight with the freshest known debrief folded in, so re-opening the
-    /// sheet after a save seeds from the just-saved debrief (the immutable
-    /// `viewModel.flight` still carries the list-load value).
-    private var flightForDebrief: FlightResponse {
-        var f = viewModel.flight
-        f.debrief = viewModel.debrief
-        return f
     }
 
     // MARK: Stale-altitude notice — directly under the hero, whose reason line is
@@ -117,34 +78,25 @@ struct AdvisoryTabView: View {
 
     // MARK: Debrief — post-flight judgement (past owned flights only)
 
-    /// The pilot's debrief card: an "Add debrief" prompt or a read-only summary
-    /// with "Edit". Only for owned flights that have already ended — matches the
-    /// web flight-detail placement (a section under the assessment).
+    /// The pilot's debrief card (#1024): the stored decision and a link to
+    /// the Debrief section on the Observed tab, where the report's questions
+    /// are answered. Owned flights that have ended only.
     @ViewBuilder
     private var debriefSection: some View {
         if viewModel.flight.isPast && viewModel.flight.isEditable {
-            DebriefCard(debrief: viewModel.debrief, advisoriesReady: advisoriesReady) {
-                presentDebrief()
+            DebriefCard(debrief: viewModel.debrief, questionsOpen: questionsOpen) {
+                if viewModel.showsObservedTab { viewModel.selectedTab = .observed }
             }
             .padding(.horizontal, Theme.cardPadding)
         }
     }
 
-    /// Advisories have reached a terminal state (loaded or failed) — the point at
-    /// which `flaggedTagIds` is trustworthy for a fresh debrief.
-    private var advisoriesReady: Bool {
-        switch viewModel.advisoriesState {
-        case .loaded, .error: return true
-        case .idle, .loading: return false
+    /// Unanswered questions: the loaded report's, else the list's server count.
+    private var questionsOpen: Int {
+        if let section = viewModel.debriefSection {
+            return section.questions.filter { $0.answer == nil }.count
         }
-    }
-
-    /// Advisory categories flagged AMBER/RED on the loaded briefing, mapped to
-    /// debrief tags — the flown-form outcome rows. Empty until advisories load.
-    private var flaggedTagIds: [String] {
-        guard case .loaded(let response) = viewModel.advisoriesState else { return [] }
-        let pairs = response.advisories.map { (id: $0.advisoryId, status: $0.aggregateStatus) }
-        return appState.helpCatalog.debriefTaxonomy.flaggedTagIds(fromAdvisories: pairs)
+        return viewModel.flight.openDebriefQuestions
     }
 
     // MARK: Scroll-spy sections (only those present)
