@@ -497,7 +497,9 @@ fun FlyFunWeatherRoot(
                         selectedFlightId = activeFlightId,
                         unseenWhatsNewCount = unseenWhatsNew,
                         onFlightClick = { flight ->
-                            openBriefing(flightId = flight.id, flight = flight)
+                            // A row showing the "Debrief" nudge opens on the Observed tab's
+                            // Debrief section (#1024), like the debrief push.
+                            openBriefing(flightId = flight.id, flight = flight, openObserved = flight.needsDebrief)
                         },
                         onAddFlightClick = { openFlightSheet() },
                         onEditFlightClick = { flight -> openFlightSheet(editing = flight) },
@@ -571,7 +573,9 @@ fun FlyFunWeatherRoot(
                         selectedFlightId = activeFlightId,
                         unseenWhatsNewCount = unseenWhatsNew,
                         onFlightClick = { flight ->
-                            openBriefing(flightId = flight.id, flight = flight)
+                            // A row showing the "Debrief" nudge opens on the Observed tab's
+                            // Debrief section (#1024), like the debrief push.
+                            openBriefing(flightId = flight.id, flight = flight, openObserved = flight.needsDebrief)
                         },
                         onAddFlightClick = { openFlightSheet() },
                         onEditFlightClick = { flight -> openFlightSheet(editing = flight) },
