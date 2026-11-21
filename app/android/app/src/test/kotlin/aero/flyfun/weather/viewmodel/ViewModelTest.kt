@@ -735,4 +735,66 @@ class ViewModelTest {
             return inner.refreshPack(flightId, force, notifyEmail)
         }
     }
+
+    // --- Observed tab timing (mirrors iOS BriefingViewModel.reconcileTabs) ---
+
+    /** The fixture flight re-timed to depart in an hour: inside the live window. */
+    private fun FixtureBriefingRepository.departInOneHour() {
+        val idx = flights.indexOfFirst { it.id == FixtureBriefingData.FLIGHT_ID }
+        val dep = java.time.Instant.now().plusSeconds(3600).truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+        flights[idx] = flights[idx].copy(departureTime = dep.toString())
+    }
+
+    /** A repository whose snapshot carries nothing measured and whose live layer is empty. */
+    private class NoObservationsRepository : FixtureBriefingRepository(mockLive = false) {
+        override suspend fun snapshot(flightId: String, timestamp: String) =
+            FixtureBriefingData.snapshot.copy(
+                routeObservations = null,
+                routeSigmets = null,
+                observedConditions = null,
+            )
+    }
+
+    @Test
+    fun briefingViewModel_landsOnObservedOnceInsideLiveWindow() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = FixtureBriefingRepository(mockLive = true).apply { departInOneHour() }
+        val vm = BriefingViewModel(flightId = FixtureBriefingData.FLIGHT_ID, repository = repo, scopeOverride = testScope)
+
+        vm.loadInitialBriefing()
+        testScope.advanceUntilIdle()
+
+        assertEquals(BriefingTab.OBSERVED, vm.availableTabs.value.last())
+        assertEquals(BriefingTab.OBSERVED, vm.selectedTab.value)
+
+        // Once per open: leaving Observed and re-reconciling (tracking change) does not pull back.
+        vm.selectTab(BriefingTab.ADVISORY)
+        vm.onTrackingStateChanged()
+        assertEquals(BriefingTab.ADVISORY, vm.selectedTab.value)
+    }
+
+    @Test
+    fun briefingViewModel_hidesObservedInsideWindowWithNothingToShow() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val repo = NoObservationsRepository().apply { departInOneHour() }
+        val vm = BriefingViewModel(flightId = FixtureBriefingData.FLIGHT_ID, repository = repo, scopeOverride = testScope)
+
+        vm.loadInitialBriefing()
+        testScope.advanceUntilIdle()
+
+        assertFalse(BriefingTab.OBSERVED in vm.availableTabs.value)
+        assertEquals(BriefingTab.ADVISORY, vm.selectedTab.value)
+    }
+
+    @Test
+    fun briefingViewModel_pushRequestWaitsForObservedContent() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val vm = BriefingViewModel(flightId = FixtureBriefingData.FLIGHT_ID, repository = NoObservationsRepository(), scopeOverride = testScope)
+
+        vm.applyLaunchOptions(openObserved = true)
+        testScope.advanceUntilIdle()
+
+        assertFalse(BriefingTab.OBSERVED in vm.availableTabs.value)
+        assertEquals(BriefingTab.ADVISORY, vm.selectedTab.value)
+    }
 }

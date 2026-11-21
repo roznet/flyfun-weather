@@ -142,7 +142,10 @@ class BriefingViewModel(
     val activePointIndex: StateFlow<Int?> = _activePointIndex.asStateFlow()
 
     private var currentFlightId: String? = flightId
-    private var openObservedRequested: Boolean = false
+    /** A push / deep link asked for Observed; honoured once the tab is offered (iOS `observedRequested`). */
+    private var observedRequested: Boolean = false
+    /** The once-per-open flight-day landing on Observed has run (iOS `flightDayDefaultApplied`). */
+    private var flightDayDefaultApplied: Boolean = false
     private var hasStartedInitialLoad: Boolean = false
 
     fun loadInitialBriefing(preferredTimestamp: String? = null) {
@@ -151,7 +154,7 @@ class BriefingViewModel(
         load(
             flightId = id,
             initialPackTimestamp = preferredTimestamp,
-            openObserved = _selectedTab.value == BriefingTab.OBSERVED,
+            openObserved = observedRequested,
         )
     }
 
@@ -166,7 +169,9 @@ class BriefingViewModel(
         openObserved: Boolean = false,
     ) {
         if (openObserved) {
-            selectTab(BriefingTab.OBSERVED)
+            // Held until the tab is offered rather than forcing an empty Observed tab in.
+            observedRequested = true
+            if (_flight.value != null) reconcileTabs()
         }
         if (!hasStartedInitialLoad) {
             loadInitialBriefing(preferredTimestamp = preferredTimestamp)
@@ -189,7 +194,7 @@ class BriefingViewModel(
         openObserved: Boolean = false,
     ) {
         currentFlightId = flightId
-        openObservedRequested = openObserved
+        if (openObserved) observedRequested = true
         hasStartedInitialLoad = true
         scope.launch {
             loadInternal(flightId, initialPackTimestamp, openObserved)
@@ -357,22 +362,41 @@ class BriefingViewModel(
         reconcileTabs(openObserved = openObserved)
     }
 
+    /**
+     * Mirrors iOS `BriefingViewModel.reconcileTabs`: Observed is offered only when the briefing
+     * carries something measured ([hasObservedContent]), and keeps the selection on a tab that
+     * exists. A push / deep-link request opens Observed once it is offered; otherwise, once per
+     * open, the screen lands on Observed when it is offered and the flight is inside the live
+     * window (departure −3 h … arrival +1 h, or still tracked, #874) — unless something already
+     * moved the selection off Advisory.
+     */
     private fun reconcileTabs(openObserved: Boolean = false) {
-        val showsObserved = openObserved ||
-            hasObservedContent(_snapshot.value, _liveLayer.value) ||
-            (_flight.value?.let { f ->
-                // A flight being tracked is started and not landed: its window runs on (#874).
-                val started = FlightTrackingService.isTracking.value &&
-                    FlightTrackingService.activeFlightId.value == f.id
-                f.isInLiveObservationWindow(started = started)
-            } == true)
+        if (openObserved) observedRequested = true
+        val showsObserved = hasObservedContent(_snapshot.value, _liveLayer.value)
         val tabs = BriefingTab.tabs(showsObserved = showsObserved)
         _availableTabs.value = tabs
-
-        if (openObserved && BriefingTab.OBSERVED in tabs) {
-            _selectedTab.value = BriefingTab.OBSERVED
-        } else if (_selectedTab.value !in tabs) {
+        if (_selectedTab.value !in tabs) {
             _selectedTab.value = BriefingTab.ADVISORY
+        }
+        if (!showsObserved) return
+
+        if (observedRequested) {
+            // An explicit push tap wins over the once-per-open default, and counts as it.
+            observedRequested = false
+            flightDayDefaultApplied = true
+            _selectedTab.value = BriefingTab.OBSERVED
+            return
+        }
+        if (flightDayDefaultApplied) return
+        flightDayDefaultApplied = true
+        val inWindow = _flight.value?.let { f ->
+            // A flight being tracked is started and not landed: its window runs on (#874).
+            val started = FlightTrackingService.isTracking.value &&
+                FlightTrackingService.activeFlightId.value == f.id
+            f.isInLiveObservationWindow(started = started)
+        } == true
+        if (inWindow && _selectedTab.value == BriefingTab.ADVISORY) {
+            _selectedTab.value = BriefingTab.OBSERVED
         }
     }
 

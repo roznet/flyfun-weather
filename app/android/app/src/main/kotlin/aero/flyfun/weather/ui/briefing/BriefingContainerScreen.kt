@@ -106,7 +106,7 @@ import kotlin.math.roundToInt
  *   for the owner, an overflow with Edit flight / Duplicate… (#885: the briefing is where a
  *   pilot notices the date or route is wrong).
  * - SSE refresh progress banner and offline download banner.
- * - Adaptive 5-tab navigation (`BriefingTab.tabs(showsObserved)`).
+ * - Adaptive 5-tab navigation (`BriefingTab.tabs(showsObserved)`, reconciled by the view model).
  * - [BackHandler] that clears an active [FocusIntent] or switches back to [BriefingTab.ADVISORY]
  *   before popping the screen.
  * - Switches between [AdvisoryTabScreen], [DiscussionTabScreen], [ObservedTabPreviewScreen],
@@ -129,7 +129,6 @@ fun BriefingContainerScreen(
     val availableTabsState by viewModel.availableTabs.collectAsState()
     val advisories by viewModel.advisories.collectAsState()
     val snapshot by viewModel.snapshot.collectAsState()
-    val liveLayer by viewModel.liveLayer.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val refreshProgressText by viewModel.refreshProgressText.collectAsState()
     val isDownloadingPack by viewModel.isDownloadingPack.collectAsState()
@@ -194,16 +193,7 @@ fun BriefingContainerScreen(
         }
     }
 
-    val showsObserved = remember(availableTabsState, liveLayer, snapshot) {
-        BriefingTab.OBSERVED in availableTabsState ||
-            liveLayer != null ||
-            snapshot?.routeObservations != null ||
-            snapshot?.routeSigmets != null ||
-            snapshot?.observedConditions != null
-    }
-    val tabs = remember(availableTabsState, showsObserved) {
-        availableTabsState.ifEmpty { BriefingTab.tabs(showsObserved = showsObserved) }
-    }
+    val tabs = availableTabsState
 
     // BackHandler: first clear FocusIntent, then return to ADVISORY tab before popping screen
     BackHandler(enabled = focusIntent != null || selectedTab != BriefingTab.ADVISORY) {
