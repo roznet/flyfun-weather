@@ -7,6 +7,7 @@ import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.data.CachingBriefingRepository
 import aero.flyfun.weather.data.OnlineBriefingRepository
 import aero.flyfun.weather.model.*
+import aero.flyfun.weather.model.rules.DebriefSectionRules
 import aero.flyfun.weather.service.FlightTrackingService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -96,8 +97,16 @@ class BriefingViewModel(
     private val _debrief = MutableStateFlow<DebriefResponse?>(null)
     val debrief: StateFlow<DebriefResponse?> = _debrief.asStateFlow()
 
-    private val _debriefTaxonomy = MutableStateFlow<DebriefTaxonomy?>(defaultTaxonomy())
-    val debriefTaxonomy: StateFlow<DebriefTaxonomy?> = _debriefTaxonomy.asStateFlow()
+    /** The Debrief section's report (#1024), once the flight is due it; null before. */
+    private val _debriefReport = MutableStateFlow<DebriefReport?>(null)
+    val debriefReport: StateFlow<DebriefReport?> = _debriefReport.asStateFlow()
+    private val _debriefBusy = MutableStateFlow(false)
+    val debriefBusy: StateFlow<Boolean> = _debriefBusy.asStateFlow()
+    private val _debriefError = MutableStateFlow<String?>(null)
+    val debriefError: StateFlow<String?> = _debriefError.asStateFlow()
+    /** "I changed level or route" ticked before its question had an answer. */
+    private val _debriefPendingAvoided = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val debriefPendingAvoided: StateFlow<Map<String, Boolean>> = _debriefPendingAvoided.asStateFlow()
 
     private val _liveLayer = MutableStateFlow<LiveLayerResponse?>(null)
     val liveLayer: StateFlow<LiveLayerResponse?> = _liveLayer.asStateFlow()
@@ -219,6 +228,8 @@ class BriefingViewModel(
                 Triple(flightDeferred.await(), packsDeferred.await(), latestDeferred.await())
             }
             _flight.value = loadedFlight
+            // #1024: the Debrief section, off the pack load path.
+            scope.launch { loadDebriefReportIfDue(openObserved) }
 
             val mergedPacks = buildList {
                 if (latest != null && packList.none { it.fetchTimestamp == latest.fetchTimestamp }) {
@@ -333,12 +344,6 @@ class BriefingViewModel(
         _alternates.value = alts
         _timeOptions.value = times
         _debrief.value = deb
-        val resolvedDeb = deb
-        if (resolvedDeb != null && (resolvedDeb.taxonomy.categories.isNotEmpty() || resolvedDeb.taxonomy.severities.isNotEmpty())) {
-            _debriefTaxonomy.value = resolvedDeb.taxonomy
-        } else if (_debriefTaxonomy.value == null) {
-            _debriefTaxonomy.value = defaultTaxonomy()
-        }
         _liveLayer.value = resolvedLive
 
         val models = buildList {
@@ -359,6 +364,8 @@ class BriefingViewModel(
 
     private fun reconcileTabs(openObserved: Boolean = false) {
         val showsObserved = openObserved ||
+            // #1024: after the window the tab opens on the Debrief section.
+            _debriefReport.value != null ||
             hasObservedContent(_snapshot.value, _liveLayer.value) ||
             (_flight.value?.let { f ->
                 // A flight being tracked is started and not landed: its window runs on (#874).
@@ -696,31 +703,89 @@ class BriefingViewModel(
         }
     }
 
-    fun submitDebrief(request: DebriefRequest) {
+    // ========================================================================
+    // Debrief section (#1024): the server's report, the pilot's taps sent back
+    // ========================================================================
+
+    private suspend fun loadDebriefReportIfDue(openObserved: Boolean) {
+        val f = _flight.value ?: return
+        val started = FlightTrackingService.isTracking.value && FlightTrackingService.activeFlightId.value == f.id
+        if (_debriefReport.value != null || !DebriefSectionRules.isDue(f, started = started)) return
+        val report = runSuspendCatching { repository.debriefReport(f.id) }.getOrNull() ?: return
+        _debriefReport.value = report
+        reconcileTabs(openObserved = openObserved)
+        // Open questions land the pilot on them, once per open (a deep link off Advisory wins).
+        val decision = DebriefSectionRules.decision(_debrief.value, report)
+        if (_selectedTab.value == BriefingTab.ADVISORY && DebriefSectionRules.openQuestions(report) > 0 &&
+            decision != DebriefSectionRules.Decision.CANCELLED
+        ) {
+            _selectedTab.value = BriefingTab.OBSERVED
+        }
+    }
+
+    private fun debriefSave(work: suspend (String) -> Unit) {
         val flightId = currentFlightId ?: _flight.value?.id ?: return
+        if (_debriefBusy.value) return
+        _debriefBusy.value = true
+        _debriefError.value = null
         scope.launch {
             try {
-                val saved = repository.saveDebrief(flightId, request)
-                _debrief.value = saved
-                if (saved.taxonomy.categories.isNotEmpty() || saved.taxonomy.severities.isNotEmpty()) {
-                    _debriefTaxonomy.value = saved.taxonomy
-                }
+                work(flightId)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
-                _errorMessage.value = e.message ?: "Failed to save debrief"
+                _debriefError.value = "Could not save. Check your connection and try again."
+            } finally {
+                _debriefBusy.value = false
             }
         }
     }
 
-    fun deleteDebrief() {
-        val flightId = currentFlightId ?: _flight.value?.id ?: return
-        scope.launch {
-            try {
-                repository.deleteDebrief(flightId)
-                _debrief.value = null
-            } catch (e: Throwable) {
-                _errorMessage.value = e.message ?: "Failed to delete debrief"
-            }
+    private fun saveDebriefDecision(decision: DebriefSectionRules.Decision, reasons: List<String>, note: String?) =
+        debriefSave { flightId ->
+            val saved = repository.saveDebrief(
+                flightId,
+                DebriefRequest(decision = decision.wire, reasons = reasons, note = note?.trim()?.takeIf { it.isNotEmpty() }),
+            )
+            _debrief.value = saved
+            // The report reads the decision: a cancelled flight asks nothing.
+            _debriefReport.value = repository.debriefReport(flightId)
         }
+
+    fun chooseDebriefDecision(decision: DebriefSectionRules.Decision) {
+        if (DebriefSectionRules.decision(_debrief.value, _debriefReport.value) == decision) return
+        saveDebriefDecision(decision, emptyList(), _debrief.value?.note)
+    }
+
+    fun answerDebriefQuestion(question: DebriefQuestion, option: String) =
+        sendDebriefAnswer(DebriefSectionRules.answerTap(question, option, _debriefPendingAvoided.value))
+
+    fun setDebriefAvoided(question: DebriefQuestion, avoided: Boolean) {
+        val stored = question.answer
+        if (stored != null) {
+            sendDebriefAnswer(DebriefAnswerItem(questionId = question.id, answer = stored.answer, avoided = avoided))
+        } else {
+            _debriefPendingAvoided.value = _debriefPendingAvoided.value + (question.id to avoided)
+        }
+    }
+
+    fun toggleDebriefCancelReason(tag: String) {
+        val current = _debrief.value?.takeIf { it.decision == "cancelled" }?.reasons.orEmpty()
+        saveDebriefDecision(DebriefSectionRules.Decision.CANCELLED, DebriefSectionRules.toggledReasons(current, tag), _debrief.value?.note)
+    }
+
+    fun saveDebriefNote(note: String) {
+        val decision = DebriefSectionRules.decision(_debrief.value, _debriefReport.value) ?: return
+        if (note.length > DebriefSectionRules.NOTE_MAX_LENGTH) return
+        val reasons = if (decision == DebriefSectionRules.Decision.CANCELLED) _debrief.value?.reasons.orEmpty() else emptyList()
+        saveDebriefDecision(decision, reasons, note)
+    }
+
+    private fun sendDebriefAnswer(item: DebriefAnswerItem) = debriefSave { flightId ->
+        _debriefReport.value = repository.saveDebriefAnswers(flightId, DebriefAnswersRequest(answers = listOf(item)))
+        _debriefPendingAvoided.value = _debriefPendingAvoided.value - item.questionId
+        // The server stored the flight as flown with this answer.
+        _debrief.value = _debrief.value?.copy(decision = "flown", reasons = emptyList(), form = "questions")
     }
 
     fun submitDigestFeedback(thumbsUp: Boolean, comment: String? = null) {
@@ -881,21 +946,5 @@ class BriefingViewModel(
                 )
             return hasObsAirports || hasSigmets || hasObservedCond
         }
-
-        fun defaultTaxonomy(): DebriefTaxonomy = DebriefTaxonomy(
-            severities = listOf(
-                TaxonomySeverity(id = "better", label = "Better than forecast", hint = "Conditions were more benign than predicted"),
-                TaxonomySeverity(id = "as_expected", label = "As expected", hint = "Matched the briefing closely"),
-                TaxonomySeverity(id = "worse", label = "Worse than forecast", hint = "Conditions were more challenging than predicted"),
-            ),
-            categories = listOf(
-                TaxonomyCategory(id = "clouds", label = "Cloud base & tops", hint = "Ceiling or cloud layers", advisoryIds = listOf("cloud")),
-                TaxonomyCategory(id = "visibility", label = "Visibility & precip", hint = "In-flight visibility or rain/snow", advisoryIds = listOf("visibility")),
-                TaxonomyCategory(id = "winds", label = "Winds aloft & surface", hint = "Headwind, crosswind, or gusts", advisoryIds = listOf("winds_aloft")),
-                TaxonomyCategory(id = "turbulence", label = "Turbulence", hint = "Mechanical or clear-air turbulence", advisoryIds = listOf("turbulence")),
-                TaxonomyCategory(id = "icing", label = "Icing", hint = "Airframe icing or freezing level", advisoryIds = listOf("icing")),
-                TaxonomyCategory(id = "convective", label = "Convection", hint = "Build-ups, CB/TCU, or storms", advisoryIds = listOf("convective")),
-            ),
-        )
     }
 }

@@ -56,6 +56,13 @@ class PushPayloadTest {
     }
 
     @Test
+    fun `debrief push opens Observed on the briefing channel`() {
+        val payload = PushNotificationManager.parsePayload(mapOf("flight_id" to "f1", "type" to "debrief"))!!
+        assertTrue(payload.openObserved)
+        assertEquals(PushNotificationManager.CHANNEL_BRIEFING_ALERTS, payload.channelId)
+    }
+
+    @Test
     fun `local notification tap extras keep open_observed`() {
         val payload = PushNotificationManager.parsePayload(
             mapOf("flight_id" to "f1", "pack_timestamp" to "t", "open_observed" to "true"),

@@ -79,6 +79,12 @@ open class FixtureBriefingRepository(
     var aircraftPresetsError: Throwable? = null
     val durationEstimateRequests = mutableListOf<DurationEstimateRequest>()
     var savedDebrief: DebriefResponse? = null
+    /**
+     * The debrief report served (#1024), or null for none (`NotFound`, what the demo flights
+     * get). Tests set it, e.g. to the shared `debrief-report` fixture; answers apply onto it.
+     */
+    var debriefReportFixture: DebriefReport? = null
+    val savedDebriefAnswers = mutableListOf<DebriefAnswersRequest>()
 
     override suspend fun listFlights(): List<FlightResponse> = flights.toList()
 
@@ -347,14 +353,35 @@ open class FixtureBriefingRepository(
     override suspend fun saveDebrief(flightId: String, req: DebriefRequest): DebriefResponse {
         val resp = DebriefResponse(
             flightId = flightId,
+            decision = req.decision,
+            reasons = req.reasons,
             outcomes = req.outcomes,
-            otherText = req.otherText,
-            ratingOverall = req.ratingOverall,
+            note = req.note,
+            form = req.form,
             createdAt = "2099-06-30T12:00:00Z",
             updatedAt = "2099-06-30T12:00:00Z",
         )
         savedDebrief = resp
         return resp
+    }
+
+    override suspend fun debriefReport(flightId: String): DebriefReport {
+        val report = debriefReportFixture ?: throw ApiError.NotFound
+        return if (savedDebrief?.decision == "cancelled") report.copy(cancelled = true, questions = emptyList()) else report
+    }
+
+    override suspend fun saveDebriefAnswers(flightId: String, req: DebriefAnswersRequest): DebriefReport {
+        savedDebriefAnswers += req
+        val report = debriefReportFixture ?: throw ApiError.NotFound
+        val byId = req.answers.associateBy { it.questionId }
+        val updated = report.copy(
+            questions = report.questions.map { q ->
+                val item = byId[q.id] ?: return@map q
+                q.copy(answer = item.answer?.let { DebriefAnswer(answer = it, avoided = item.avoided, note = item.note) })
+            },
+        )
+        debriefReportFixture = updated
+        return updated
     }
 
     override suspend fun deleteDebrief(flightId: String) {
