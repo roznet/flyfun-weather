@@ -138,8 +138,79 @@ def in_cloud_on_path(ctx: RouteContext, cloud_layers_at) -> list[tuple[str, floa
     return [(ph, v[0], v[1], v[2]) for ph, v in found.items()]
 
 
+_PHASE_ORDER = ("climb", "cruise", "descent")
+
+
+def path_is_live(ctx: RouteContext) -> bool:
+    """True when the cards grade on the flight path, not flat cruise."""
+    return ctx.flight_path_live and ctx.flight_path is not None
+
+
+def _cloud_overlaps(layers, lo_ft: float, hi_ft: float) -> bool:
+    """A BKN / OVC layer overlaps ``[lo_ft, hi_ft]`` (inclusive, as ``flown_band`` grading)."""
+    from weatherbrief.models import CloudCoverage
+
+    return any(
+        cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+        and cl.base_ft <= hi_ft and cl.top_ft >= lo_ft
+        for cl in layers
+    )
+
+
+def cell_phases_in_cloud(ctx: RouteContext, idx: int, layers) -> set[str]:
+    """Which phases of ``analyses[idx]``'s cell fly in BKN / OVC ``layers`` (#1011).
+
+    Empty in flat mode. A cell the band grading flagged always names at least
+    one phase: if no single part meets the cloud (it sits between parts), the
+    cell's own phases are returned.
+    """
+    cell = ctx.path_slice(idx)
+    if cell is None or not layers:
+        return set()
+    found: set[str] = set()
+    for part in cell.vertical:
+        if _cloud_overlaps(layers, part.base_ft, part.top_ft):
+            found.add(part.phase)
+    has_level = cell.level_nm > 0 or not cell.vertical
+    if has_level and _cloud_overlaps(layers, cell.level_ft, cell.level_ft):
+        found.add("cruise")
+    if not found and _cloud_overlaps(layers, *(flown_band(ctx, idx) or (0, -1))):
+        found = {p.phase for p in cell.vertical}
+        if has_level:
+            found.add("cruise")
+    return found
+
+
+def path_phases(ctx: RouteContext) -> set[str]:
+    """The phases the live path flies over the analysed route (empty in flat mode)."""
+    found: set[str] = set()
+    for idx in range(len(ctx.analyses)):
+        cell = ctx.path_slice(idx)
+        if cell is None:
+            return set()
+        found.update(p.phase for p in cell.vertical)
+        if cell.level_nm > 0 or not cell.vertical:
+            found.add("cruise")
+    return found
+
+
+def phase_list(phases, locale: str | None) -> str:
+    """'climb, cruise and descent' in flight order, localised."""
+    from weatherbrief.analysis.advisories.strings import adv_t
+
+    names = [adv_t(f"aircraft_icing.phase.{p}", locale) for p in _PHASE_ORDER if p in phases]
+    if len(names) <= 1:
+        return "".join(names)
+    return adv_t("flight_path.list_and", locale, head=", ".join(names[:-1]), last=names[-1])
+
+
 def in_cloud_sentence(ctx: RouteContext, stretches, locale: str | None) -> str:
-    """'; in cloud on the climb from nm 3 to nm 14, about 6 min' (empty when none)."""
+    """'; this includes the climb in cloud from nm 3 to nm 14, about 6 min' (empty when none).
+
+    Worded as part of the headline extent (#1011): every climb / descent cell
+    with cloud is also a flagged cell the headline counts, so the minutes here
+    are a breakdown, never extra time to add.
+    """
     from weatherbrief.analysis.advisories.strings import adv_t
 
     parts = []
@@ -157,4 +228,9 @@ def in_cloud_sentence(ctx: RouteContext, stretches, locale: str | None) -> str:
                 "flight_path.in_cloud.descent", locale,
                 far=max(round(out_far), round(out_near) + 1), near=round(out_near), minutes=mins,
             ))
-    return "".join(parts)
+    if not parts:
+        return ""
+    return adv_t(
+        "flight_path.in_cloud.includes", locale,
+        parts=adv_t("flight_path.in_cloud.joiner", locale).join(parts),
+    )

@@ -118,8 +118,19 @@ overrides survive; the apps retry the open on the next type or speed change.
   "descent, 30 to 12 nm out"). SLD hits use the same parts. The flat endpoint
   columns stay for flat mode.
 - **VMC at cruise / cloud tops**: a cell is graded on its flown band
-  (`flown_band`), not at cruise; VMC appends "in cloud on the climb from nm X
-  to nm Y, about N min" (and the descent) from `in_cloud_on_path`.
+  (`flown_band`), not at cruise. Live VMC text (#1011) never says "at cruise":
+  the headline names the phases whose cells fly in cloud
+  (`cell_phases_in_cloud`, `phase_list`: "IMC on the climb, cruise and descent
+  over ..."; clear = "Clear on the" + `path_phases`). The climb / descent
+  minutes from `in_cloud_on_path` follow as "; this includes the climb in cloud
+  from nm X to nm Y, about N min": those cells are already in the headline
+  extent, so the sentence is a breakdown, never extra time to add. Under the
+  OVC (red) headline the breakdown counts OVC layers only, so "includes" stays
+  true. The two minute figures measure different things (headline = time over
+  the flagged distance at cruise groundspeed; breakdown = cloud thickness / path
+  rate). Flat mode keeps the "at cruise" strings. Cloud tops text has no
+  "at cruise" wording and is unchanged; only its catalog description mentions
+  the band.
 - **Solver**: `vertical_profile.solve(rate_limit=path_rate_limit(ctx))` in the
   VFR and icing mitigations, so a suggested profile is never steeper than the
   aircraft's mean planned climb / descent gradient (one bin step always

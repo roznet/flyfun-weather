@@ -167,7 +167,7 @@ under the rule with no edit to the invariants.
 | Evaluator | Category | Logic | Key Parameters |
 |-----------|----------|-------|----------------|
 | `CloudTopEvaluator` | cloud | Can we fly above the clouds? Only considers layers pilot would enter (base ≤ ceiling), ignores high cirrus | `margin_ft`, `extent_pct_amber` (25), `extent_pct_red` (60), `extent_min_nm` (30nm) |
-| `VMCCruiseEvaluator` | cloud | Cloud coverage at cruise altitude specifically (BKN/OVC percentage along route). Flight path live (#1005): each cell graded on its flown band, and "in cloud on the climb / descent ... about N min" appended; shadow via `with_path_shadow`. Cloud tops likewise read the band top | `extent_pct_amber` (25%, BKN+OVC), `extent_pct_red` (50%, OVC only), `extent_min_nm` (30nm) |
+| `VMCCruiseEvaluator` | cloud | Cloud coverage at cruise altitude specifically (BKN/OVC percentage along route). Flight path live (#1005): each cell graded on its flown band, the headline names the phases in cloud instead of "at cruise" and "; this includes the climb / descent in cloud ... about N min" breaks it down (#1011, see `flight-path.md`); shadow via `with_path_shadow`. Cloud tops likewise read the band top | `extent_pct_amber` (25%, BKN+OVC), `extent_pct_red` (50%, OVC only), `extent_min_nm` (30nm) |
 
 ### Precipitation
 
