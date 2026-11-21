@@ -27,8 +27,14 @@ flight_debriefs
   reasons_json   ['IMC','WIND',...]                  (cancelled only)
   outcomes_json  {'icing':'worse','cloud':'consistent',...}  (flown only)
   note           free text, ≤ 300 chars
+  form           'questions' | 'legacy'   (#1023)
   created_at, updated_at
 ```
+
+`form` (#1023): `questions` = the flown outcomes are derived from the debrief
+answers (`flight_debrief_answers`, see `debrief-report.md`); `legacy` = the old
+8-category form below, kept for older apps until #1024 ships. Existing rows
+were backfilled `legacy`.
 
 `monitoring` = flight created to watch weather, not intended to fly. It is
 neither a go nor a no-go decision, so both `reasons_json` and `outcomes_json`
@@ -240,6 +246,8 @@ all. Stats panel surfaces a copy caveat acknowledging the bias.
 - `web/ts/adapters/debrief-adapter.ts`
 - `app/.../Models/API/DebriefTaxonomy.swift`, `DebriefResponse.swift` — iOS wire types + baseline
 - `app/.../ViewModels/DebriefViewModel.swift`, `Views/Briefing/DebriefFormView.swift` — iOS form + card
+
+Debrief report, answers and the window-close push: `debrief-report.md`.
 
 ## Out of scope (deferred)
 

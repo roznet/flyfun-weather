@@ -263,6 +263,9 @@ class FlightDebrief(BaseModel):
     reasons: list[ConditionTag] = Field(default_factory=list)
     outcomes: dict[ConditionTag, OutcomeValue] = Field(default_factory=dict)
     note: str | None = None
+    # ``questions`` (flown outcomes derived from the debrief answers, #1023)
+    # or ``legacy`` (the old 8-category form).
+    form: str | None = None
     created_at: datetime
     updated_at: datetime
 

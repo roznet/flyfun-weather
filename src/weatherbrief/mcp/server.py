@@ -614,6 +614,12 @@ def get_briefing(
     a recorded track), with the alerts raised over the flight day. Radar
     unavailable is not clear.
 
+    ``debrief`` (null until the live window closed, and for a flight the
+    caller does not own): the post-flight ``headline`` (judges only what the
+    instruments saw), and ``questions_open``, the one-tap questions the pilot
+    has not answered yet (icing, cloud, turbulence at their level). The pilot
+    answers in the app; never present the headline as a verdict.
+
     Status values:
     - ready: briefing available with fresh data
     - stale: briefing exists but weather models have updated since
@@ -725,6 +731,12 @@ def get_briefing(
         except (httpx.HTTPError, ValueError):
             logger.warning("Recap summary unavailable for %s", flight_id, exc_info=True)
             result["recap"] = None
+        # After the live window (#1023): the debrief headline and open questions.
+        try:
+            result["debrief"] = client.get_debrief_summary(flight_id)
+        except (httpx.HTTPError, ValueError):
+            logger.warning("Debrief summary unavailable for %s", flight_id, exc_info=True)
+            result["debrief"] = None
 
     return result
 

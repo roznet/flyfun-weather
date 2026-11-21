@@ -280,6 +280,12 @@ class FlightDebriefRow(Base):
     reasons_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcomes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Which form wrote the row (#1023): ``questions`` = the flown outcomes are
+    # derived from the debrief answers (``flight_debrief_answers``);
+    # ``legacy`` = the old 8-category form, whose "consistent" defaults are
+    # biased. NULL only on a row the old form wrote for a cancelled /
+    # monitoring flight before migration 121 (backfilled to ``legacy``).
+    form: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -293,6 +299,65 @@ class FlightDebriefRow(Base):
     )
 
     flight: Mapped[FlightRow] = relationship(back_populates="debrief")
+
+
+class FlightDebriefAnswerRow(Base):
+    """One answer to one debrief question (#1023).
+
+    The question is stored as it was asked (``question_json``: text, stretch,
+    time, flown level and its source) with the forecast it was asked about
+    (``forecast_json``: per-model severity, base and top at the stretch), so a
+    later change of the rules (``rules_version``) cannot reinterpret it. These
+    rows feed verification (#792, #411 step 5). Cascade-deletes with the flight.
+    """
+
+    __tablename__ = "flight_debrief_answers"
+    __table_args__ = (
+        UniqueConstraint("flight_id", "question_id", name="uq_flight_debrief_answer"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    flight_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("flights.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    question_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    answer: Mapped[str] = mapped_column(String(32), nullable=False)
+    avoided: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    answered_at: Mapped[datetime] = mapped_column(TZDateTime(), nullable=False)
+    rules_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    question_json: Mapped[str] = mapped_column(Text, nullable=False)
+    forecast_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class FlightDebriefReportRow(Base):
+    """The debrief report as built once at window close (#1023).
+
+    Written by the window-close job (``tasks/debrief_close.py``), one row per
+    flight, never rebuilt: its presence is what ``debrief_ready`` means and
+    what stops a second push. ``questions_json`` keeps the questions asked
+    (id, kind, text) so the flights list and the agents read them without
+    rebuilding the report. ``push_outcome``: ``sent`` | ``shadow`` |
+    ``skipped:<reason>`` | ``none`` (not interesting enough) | ``failed``.
+    """
+
+    __tablename__ = "flight_debrief_reports"
+
+    flight_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("flights.id", ondelete="CASCADE"), primary_key=True
+    )
+    built_at: Mapped[datetime] = mapped_column(TZDateTime(), nullable=False)
+    rules_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    headline: Mapped[str | None] = mapped_column(Text, nullable=True)
+    differs_from_forecast: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    interesting: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reasons_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    questions_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    push_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    push_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    pushed_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
 
 
 class FlightSubscriptionRow(Base):

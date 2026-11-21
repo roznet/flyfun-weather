@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -41,6 +42,10 @@ class DebriefRequest(BaseModel):
     reasons: list[ConditionTag] = Field(default_factory=list)
     outcomes: dict[ConditionTag, OutcomeValue] = Field(default_factory=dict)
     note: str | None = None
+    # #1023: ``questions`` = the Debrief section's flown / cancelled tap; a
+    # flown flight's outcomes then come from its answers and ``outcomes`` is
+    # ignored. Omitted = the old form (``legacy``), which older apps send.
+    form: Literal["questions", "legacy"] = "legacy"
 
 
 class DebriefResponse(BaseModel):
@@ -55,6 +60,7 @@ class DebriefResponse(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     outcomes: dict[str, str] = Field(default_factory=dict)
     note: str | None = None
+    form: str | None = None
     created_at: str
     updated_at: str
 
@@ -66,6 +72,7 @@ class DebriefResponse(BaseModel):
             reasons=[t.value for t in d.reasons],
             outcomes={t.value: v.value for t, v in d.outcomes.items()},
             note=d.note,
+            form=d.form,
             created_at=d.created_at.isoformat(),
             updated_at=d.updated_at.isoformat(),
         )
@@ -156,6 +163,7 @@ def upsert_flight_debrief(
             reasons=req.reasons,
             outcomes=req.outcomes,
             note=req.note,
+            form=req.form,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -184,3 +192,83 @@ def get_user_debrief_stats(
     debriefs = list_debriefs_for_user(db, user_id)
     stats = compute_stats(flights, debriefs, window_days=window_days)
     return StatsResponse.from_stats(stats)
+
+
+# --- Debrief report and answers (#1023) ---
+
+
+class AnswerItem(BaseModel):
+    """One answer. ``answer`` null clears it."""
+
+    question_id: str = Field(max_length=64)
+    answer: str | None = None
+    avoided: bool = False
+    note: str | None = Field(default=None, max_length=300)
+
+
+class AnswersRequest(BaseModel):
+    """Body for PUT /flights/{id}/debrief/answers: one or more answers."""
+
+    answers: list[AnswerItem] = Field(min_length=1, max_length=10)
+
+
+@router.get("/flights/{flight_id}/debrief/report")
+def get_flight_debrief_report(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+) -> dict:
+    """The post-flight debrief report (#1023): headline and detail lines,
+    forecast / observed strip, airports at actual times, the questions with
+    their answers, and whether the flight earns a push. Built on request from
+    the recap, the forecast pack and the live history; owner only."""
+    _load_owned_flight_or_404(db, flight_id, user_id)
+    from weatherbrief.debriefs.report import report_for_flight
+
+    return report_for_flight(db, flight_id)
+
+
+@router.put("/flights/{flight_id}/debrief/answers")
+def put_flight_debrief_answers(
+    flight_id: str,
+    req: AnswersRequest,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+) -> dict:
+    """Store answers to questions the report asks now, fold them into the
+    flight's debrief (flown, form ``questions``, derived outcomes) and return
+    the report. 404 for a question the report does not ask; 422 for an
+    answer the question does not offer."""
+    _load_owned_flight_or_404(db, flight_id, user_id)
+    from weatherbrief.debriefs.report import REPORT_VERSION, report_for_flight, validate_answer
+    from weatherbrief.storage.debriefs import save_answers
+
+    report = report_for_flight(db, flight_id)
+    asked = {q["id"]: q for q in report.get("questions") or []}
+    items = []
+    for a in req.answers:
+        question = asked.get(a.question_id)
+        if question is None:
+            raise HTTPException(status_code=404, detail=f"No question {a.question_id!r} for this flight")
+        if a.answer is not None:
+            try:
+                validate_answer(question, a.answer, a.avoided)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+        items.append((question, a.answer, a.avoided, a.note))
+    save_answers(db, flight_id, items, rules_version=REPORT_VERSION)
+    return report_for_flight(db, flight_id)
+
+
+@router.get("/flights/{flight_id}/debrief/summary")
+def get_flight_debrief_summary(
+    flight_id: str,
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+) -> dict:
+    """``{"debrief": ...}``: the headline and open questions stored at window
+    close, for the agents (``get_briefing``); ``null`` before. Owner only."""
+    _load_owned_flight_or_404(db, flight_id, user_id)
+    from weatherbrief.tasks.debrief_close import debrief_summary
+
+    return {"debrief": debrief_summary(db, flight_id)}

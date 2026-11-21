@@ -73,6 +73,9 @@ class FakeClient:
             raise self._recap_error
         return self._recap
 
+    def get_debrief_summary(self, flight_id):
+        return getattr(self, "_debrief", None)
+
 
 @pytest.fixture
 def patch_client(monkeypatch):
@@ -155,3 +158,24 @@ def test_recap_failure_does_not_fail_briefing(patch_client):
     res = server.get_briefing("flight-1")
     assert res["recap"] is None
     assert res["live"] == _LIVE
+
+
+# --- Debrief (#1023) ----------------------------------------------------------
+
+
+def test_debrief_block_passed_through(patch_client, monkeypatch):
+    debrief = {"headline": "Clear, as forecast.", "questions_open": [{"id": "icing-10-40"}]}
+    monkeypatch.setattr(FakeClient, "_debrief", debrief, raising=False)
+    patch_client(live=_LIVE)
+    res = server.get_briefing("flight-1")
+    assert res["debrief"] == debrief
+
+
+def test_debrief_failure_does_not_fail_briefing(patch_client, monkeypatch):
+    def boom(self, flight_id):
+        raise ValueError("Expecting value")
+
+    monkeypatch.setattr(FakeClient, "get_debrief_summary", boom)
+    patch_client(live=_LIVE)
+    res = server.get_briefing("flight-1")
+    assert res["debrief"] is None and res["live"] == _LIVE

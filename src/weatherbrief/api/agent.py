@@ -453,6 +453,14 @@ def get_briefing(
 
     result["recap"] = recap_summary(db, flight_id)
 
+    # After the live window (#1023): the debrief headline and the questions
+    # still open. Owner only; null before window close.
+    result["debrief"] = None
+    if flight.user_id == user_id:
+        from weatherbrief.tasks.debrief_close import debrief_summary
+
+        result["debrief"] = debrief_summary(db, flight_id)
+
     return result
 
 
