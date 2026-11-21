@@ -4,7 +4,8 @@ A mutmut run over ``aircraft_icing.py`` and ``sounding/sld.py`` (2026-11-21)
 killed 63% of mutants at 96% line coverage: the lines ran, their results were
 not asserted. Each test here pins one behaviour a surviving mutant could break
 without any other test noticing. The three ``test_metamorphic_*`` checks run
-rules (not fixed outputs) over every example route built in this file.
+rules (not fixed outputs) over every example route registered at import in
+this file (21 routes).
 """
 
 from __future__ import annotations
@@ -108,6 +109,44 @@ def _example(name, points, *, path=False, terrain_ft=500.0, default=CLEAN):
     return points
 
 
+def _points(name):
+    return EXAMPLES[name]["points"]
+
+
+# All example routes are defined here, at import, so the metamorphic
+# parametrizations at the bottom see every one of them (pytest collects the
+# parameter lists before any test body runs).
+_CLIMB_ICE = _iced(range(4), [_rime(3000, 5000)], freezing_level_ft=2500)
+_DESCENT_ICE = _iced(range(17, N), [_rime(3000, 5000)], freezing_level_ft=2500)
+for _n in (1, 2):
+    _example(f"path_cruise_{_n}", _iced(range(10, 10 + _n)), path=True)
+_example("path_low_terrain", _iced([10]), path=True)
+_example("path_high_terrain", _iced([10]), path=True, terrain_ft=4000.0)
+_example("path_no_escape_down", _iced([10], freezing_level_ft=1000), path=True)
+_example("path_overlap", _iced(range(4), [_rime(3000, 5000), _rime(4000, 6000)],
+                               freezing_level_ft=2500), path=True)
+_example("path_warm_between", {**{i: WARM for i in range(4, 17)}, **_CLIMB_ICE, **_DESCENT_ICE},
+         path=True)
+_example("path_cold_between", {**_CLIMB_ICE, **_DESCENT_ICE}, path=True)
+for _path in (False, True):
+    _kind = "path" if _path else "flat"
+    _example(f"gap_then_ice_{_kind}", {5: None, **_iced([8, 9, 10])}, path=_path)
+    _example(f"gap_inside_{_kind}", {**_iced([9]), 10: None, **_iced([11])}, path=_path)
+_example("flat_descent", _iced([N - 1], [_rime(3000, 5000)], freezing_level_ft=2500))
+_example("flat_cruise_then_descent", {
+    **_iced([N - 2], [_rime(7000, 9000)]),
+    **_iced([N - 1], [_rime(7000, 9000), _rime(3000, 5000)], freezing_level_ft=2500),
+})
+# Extra examples that only the metamorphic checks use.
+_example("flat_long_moderate", _iced(range(8, 14)))
+_example("flat_short_rime", _iced([10], [_rime()]))
+_example("flat_no_escape", _iced([9, 10], freezing_level_ft=1000))
+_example("flat_severe", _iced([10], [_zone(risk=IcingRisk.SEVERE)]))
+_example("flat_warm_split", {**_iced([5]), **{i: WARM for i in range(6, 12)}, **_iced([12])})
+_example("path_climb_ice", _CLIMB_ICE, path=True)
+_example("clean_route", {})
+
+
 # --- 1. the flight path (#1005, live in prod) --------------------------------
 
 
@@ -121,7 +160,7 @@ def _path_cruise_minutes(ctx, indices):
 def test_path_cruise_ice_is_timed_from_the_level_leg(indices, expected):
     """Ice at cruise mid-route on the path: the level leg's minutes at groundspeed,
     short (one cell, ~4.4 min) AMBER with an escape, long (two cells) RED."""
-    points = _example(f"path_cruise_{len(indices)}", _iced(indices), path=True)
+    points = _points(f"path_cruise_{len(indices)}")
     ctx = _ctx(points, path=True)
     grade = _grade(ctx)
     [stretch] = grade.stretches
@@ -135,10 +174,8 @@ def test_path_cruise_ice_is_timed_from_the_level_leg(indices, expected):
 def test_path_escape_down_is_blocked_by_high_terrain():
     """Same short cruise exposure: escape below 4,500 ft is AMBER over 500 ft terrain,
     RED over 4,000 ft terrain (floor 5,000 ft)."""
-    points = _iced([10])
-    low = _grade(_ctx(points, path=True))
-    _example("path_high_terrain", points, path=True, terrain_ft=4000.0)
-    high = _grade(_ctx(points, path=True, terrain_ft=4000.0))
+    low = _grade(_ctx(_points("path_low_terrain"), path=True))
+    high = _grade(_ctx(_points("path_high_terrain"), path=True, terrain_ft=4000.0))
     assert low.status == AdvisoryStatus.AMBER and low.worst.escape
     assert high.status == AdvisoryStatus.RED and not high.worst.escape
     point = high.worst.points[0]
@@ -148,7 +185,7 @@ def test_path_escape_down_is_blocked_by_high_terrain():
 
 def test_path_fiki_escape_up_needs_the_ceiling():
     """FIKI on the path: up-escape 500 ft above the top, but only below ceiling - 1,000 ft."""
-    points = _iced([10], freezing_level_ft=1000)  # no escape down (terrain + margin)
+    points = _points("path_no_escape_down")  # escape down below terrain + margin
     ok = _grade(_ctx(points, FIKI, path=True))
     assert ok.worst.points[0].escape_up_ft == pytest.approx(9500)
     low_ceiling = AircraftEquipage(known=True, fiki=True, ceiling_ft=10000)
@@ -172,8 +209,7 @@ def test_iced_thickness_is_the_union_of_the_zones(spans, feet):
 
 def test_path_overlapping_zones_count_once_in_the_climb():
     """Two overlapping zones (3-5,000 and 4-6,000 ft) ice 3,000 ft of the climb, not 4,000."""
-    split = _example("path_overlap", _iced(range(4), [_rime(3000, 5000), _rime(4000, 6000)],
-                                          freezing_level_ft=2500), path=True)
+    split = _points("path_overlap")
     merged = _iced(range(4), [_rime(3000, 6000)], freezing_level_ft=2500)
     a = _grade(_ctx(split, path=True)).stretches[0]
     b = _grade(_ctx(merged, path=True)).stretches[0]
@@ -182,10 +218,7 @@ def test_path_overlapping_zones_count_once_in_the_climb():
 
 
 def test_path_warm_cruise_resets_the_clock_but_cold_clear_air_does_not():
-    ice = {**_iced(range(4), [_rime(3000, 5000)], freezing_level_ft=2500),
-           **_iced(range(17, N), [_rime(3000, 5000)], freezing_level_ft=2500)}
-    warm = _example("path_warm_between", {**{i: WARM for i in range(4, 17)}, **ice}, path=True)
-    cold = _example("path_cold_between", ice, path=True)
+    warm, cold = _points("path_warm_between"), _points("path_cold_between")
     assert [s.phases for s in _grade(_ctx(warm, path=True)).stretches] == [["climb"], ["descent"]]
     [one] = _grade(_ctx(cold, path=True)).stretches
     assert one.phases == ["climb", "descent"]
@@ -196,8 +229,7 @@ def test_path_warm_cruise_resets_the_clock_but_cold_clear_air_does_not():
 
 @pytest.mark.parametrize("path", [False, True])
 def test_icing_after_an_unassessed_point_is_still_graded(path):
-    points = _example(f"gap_then_ice_{'path' if path else 'flat'}",
-                      {5: None, **_iced([8, 9, 10])}, path=path)
+    points = _points(f"gap_then_ice_{'path' if path else 'flat'}")
     grade = _grade(_ctx(points, path=path))
     assert grade.status == AdvisoryStatus.RED
     assert {p.index for p in grade.worst.points} == {8, 9, 10}
@@ -207,8 +239,7 @@ def test_icing_after_an_unassessed_point_is_still_graded(path):
 @pytest.mark.parametrize("path", [False, True])
 def test_an_unassessed_point_inside_a_stretch_does_not_reset_it(path):
     """Two short exposures either side of a gap are one long stretch (RED), not two."""
-    points = _example(f"gap_inside_{'path' if path else 'flat'}",
-                      {**_iced([9]), 10: None, **_iced([11])}, path=path)
+    points = _points(f"gap_inside_{'path' if path else 'flat'}")
     grade = _grade(_ctx(points, path=path))
     assert len(grade.stretches) == 1
     assert grade.status == AdvisoryStatus.RED
@@ -218,7 +249,7 @@ def test_an_unassessed_point_inside_a_stretch_does_not_reset_it(path):
 
 
 def test_flat_descent_through_ice_at_the_destination_is_timed_at_500_fpm():
-    points = _example("flat_descent", _iced([N - 1], [_rime(3000, 5000)], freezing_level_ft=2500))
+    points = _points("flat_descent")
     grade = _grade(_ctx(points))
     [stretch] = grade.stretches
     assert stretch.phases == ["descent"]
@@ -230,11 +261,7 @@ def test_flat_descent_minutes_add_to_a_cruise_stretch_at_the_destination():
     """Cruise ice at 190 nm, then the descent at 200 nm through 1,000 ft (7-8,000) +
     2,000 ft (3-5,000) of ice. The last cell's cruise time (5 nm) is covered by the
     descent's 6 min, so it adds nothing on top (max, not sum)."""
-    points = _example("flat_cruise_then_descent", {
-        **_iced([N - 2], [_rime(7000, 9000)]),
-        **_iced([N - 1], [_rime(7000, 9000), _rime(3000, 5000)], freezing_level_ft=2500),
-    })
-    ctx = _ctx(points)
+    ctx = _ctx(_points("flat_cruise_then_descent"))
     [stretch] = _grade(ctx).stretches
     assert stretch.phases == ["cruise", "descent"]
     per_nm = 60.0 / ctx.cruise_groundspeed_kt
@@ -270,9 +297,14 @@ def test_live_confirmed_sld_in_the_climb_takes_over_a_lesser_stretch(monkeypatch
     assert grade.samples[0].severity.value == "red"
     assert grade.samples[10].severity.value == "amber"
     assert (grade.samples[10].region.base_ft, grade.samples[10].region.top_ft) == (7000, 9000)
-    label = grade.detail.split(":")[0]
-    rest = grade.detail[len(label) + 2:]
-    assert rest[0].isupper()  # the stretch sentence follows, re-capitalised
+    # SLD leads, then the stretch sentence follows, re-capitalised.
+    monkeypatch.setenv(SLD_MODE_ENV, "off")
+    plain = _grade(_ctx(_iced([10], [_rime()]), terrain_ft=0.0)).detail
+    label, stretch = plain.split(": ", 1)
+    assert grade.detail.startswith(f"{label}: ")
+    sld_sentence, rest = grade.detail[len(label) + 2:].split(". ", 1)
+    assert "(climb)" in sld_sentence
+    assert rest == stretch[0].upper() + stretch[1:]
 
 
 def test_live_sld_aloft_leads_an_equal_amber_stretch(monkeypatch):
@@ -370,16 +402,11 @@ def test_a_dropped_band_does_not_hide_the_next_one():
 
 # --- metamorphic checks over every example above -------------------------------
 
-# Extra examples that only the metamorphic checks use.
-_example("flat_long_moderate", _iced(range(8, 14)))
-_example("flat_short_rime", _iced([10], [_rime()]))
-_example("flat_no_escape", _iced([9, 10], freezing_level_ft=1000))
-_example("flat_severe", _iced([10], [_zone(risk=IcingRisk.SEVERE)]))
-_example("flat_warm_split", {**_iced([5]), **{i: WARM for i in range(6, 12)}, **_iced([12])})
-_example("path_climb_ice", _iced(range(4), [_rime(3000, 5000)], freezing_level_ft=2500), path=True)
-_example("clean_route", {})
 
 
+def test_every_example_reaches_the_metamorphic_checks():
+    """Guard for the registry: the parametrized names are all the examples."""
+    assert len(EXAMPLES) == 21
 def _build(example, equipage=NON_FIKI, points=None):
     return _ctx(points if points is not None else example["points"], equipage,
                 path=example["path"], terrain_ft=example["terrain_ft"],
