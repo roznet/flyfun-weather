@@ -10306,3 +10306,16 @@ button.ac-near:hover { color: var(--primary); }
   .perf-grid { grid-template-columns: 1fr 1fr; }
   .perf-gap { display: none; }
 }
+
+/* Debrief section (#1024): top of the Observed group after the window. */
+.debrief-section.busy { opacity: 0.6; pointer-events: none; }
+.debrief-headline { font-size: 1rem; font-weight: 600; margin: 0 0 10px; }
+.debrief-question { margin: 12px 0; }
+.debrief-question-text { margin: 0 0 6px; font-size: 0.92rem; }
+.debrief-avoided { display: flex; gap: 6px; align-items: center; margin-top: 6px; font-size: 0.85rem; color: var(--text-muted); }
+.debrief-note-save { margin-top: 6px; }
+.debrief-error { color: var(--red); font-size: 0.85rem; margin: 8px 0 0; }
+.debrief-details { margin-top: 12px; font-size: 0.88rem; }
+.debrief-details summary { cursor: pointer; color: var(--text-muted); }
+.debrief-details ul { margin: 6px 0 0; padding-left: 18px; }
+.debrief-details li { margin: 4px 0; }

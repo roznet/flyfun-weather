@@ -91,6 +91,10 @@ export interface FlightResponse {
   owner_display_name: string | null;
   is_subscribed: boolean;
   debrief?: DebriefResponse | null;
+  /** #1023: the debrief report was built at window close (owner only). */
+  debrief_ready?: boolean;
+  /** #1023: questions the report asks that are still unanswered. */
+  questions_open?: number;
   section?: 'future' | 'recent' | 'past';
   // Original Field-15 input the pilot typed, when captured. Null for
   // iOS/MCP-created flights and for flights created before raw_route
@@ -236,8 +240,68 @@ export interface DebriefResponse {
   reasons: ConditionTagId[];
   outcomes: Partial<Record<ConditionTagId, OutcomeValue>>;
   note: string | null;
+  /** #1023: 'questions' = flown outcomes derived from the report's answers;
+   *  'legacy' = the old 8-category form. Absent on older servers. */
+  form?: 'questions' | 'legacy' | null;
   created_at: string;
   updated_at: string;
+}
+
+// --- Debrief report (#1023 server, #1024 UI) -----------------------------
+// Everything below is drawn as served: the wording (headline, lines, question
+// text, option labels) is the server's. Shapes: src/weatherbrief/debriefs/report.py.
+
+export type DebriefQuestionKind = 'icing' | 'cloud' | 'turbulence' | 'showers';
+
+export interface DebriefQuestionOption {
+  id: string;
+  label: string;
+}
+
+/** A stored answer (storage/debriefs.py `_answer_dict`). */
+export interface DebriefAnswer {
+  kind: DebriefQuestionKind | string;
+  answer: string;
+  avoided: boolean;
+  note: string | null;
+  answered_at: string;
+  rules_version: string;
+}
+
+export interface DebriefQuestion {
+  id: string;
+  kind: DebriefQuestionKind | string;
+  text: string;
+  options: DebriefQuestionOption[];
+  /** Whether "I changed level or route to stay out of it" is offered. */
+  avoidable: boolean;
+  at?: string | null;
+  flown_ft?: number | null;
+  flown_source?: string | null;
+  answer: DebriefAnswer | null;
+}
+
+export interface DebriefSummaryLine {
+  kind: string;
+  text: string;
+}
+
+export interface DebriefReport {
+  v: string;
+  flight_id: string;
+  status: string;
+  message?: string | null;
+  cancelled: boolean;
+  departed_at?: string | null;
+  arrival_at?: string | null;
+  summary: {
+    headline: string;
+    differs_from_forecast: boolean;
+    text: string;
+    lines: DebriefSummaryLine[];
+  } | null;
+  questions: DebriefQuestion[];
+  orphan_answers?: Record<string, DebriefAnswer>;
 }
 
 export interface DebriefStatsCategory {

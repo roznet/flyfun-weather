@@ -1,0 +1,628 @@
+{
+  "v": "1",
+  "flight_id": "lell_lemi-2026-11-20-debrief",
+  "status": "ok",
+  "message": null,
+  "time_base": "planned",
+  "departed_at": "2026-10-02T08:00:00+00:00",
+  "arrival_at": "2026-10-02T10:00:00+00:00",
+  "forecast_pack": null,
+  "cancelled": false,
+  "route": [
+    "LELL",
+    "TORDU",
+    "DIKUT",
+    "SOPET",
+    "VLC",
+    "LEMI"
+  ],
+  "flown_altitude": {
+    "ft": 20000,
+    "source": "planned",
+    "fixes": 0
+  },
+  "route_nm": 275.6,
+  "waypoints": [
+    {
+      "icao": "LELL",
+      "along_nm": 0.0,
+      "eta": "2026-10-02T08:00:00+00:00"
+    },
+    {
+      "icao": "TORDU",
+      "along_nm": 102.4,
+      "eta": "2026-10-02T08:44:35.526515+00:00"
+    },
+    {
+      "icao": "DIKUT",
+      "along_nm": 124.5,
+      "eta": "2026-10-02T08:54:12.959483+00:00"
+    },
+    {
+      "icao": "SOPET",
+      "along_nm": 139.7,
+      "eta": "2026-10-02T09:00:50.107950+00:00"
+    },
+    {
+      "icao": "VLC",
+      "along_nm": 170.1,
+      "eta": "2026-10-02T09:14:04.404884+00:00"
+    },
+    {
+      "icao": "LEMI",
+      "along_nm": 275.6,
+      "eta": "2026-10-02T10:00:00+00:00"
+    }
+  ],
+  "summary": {
+    "headline": "No radar along the route.",
+    "differs_from_forecast": false,
+    "text": "Departure LELL: 08:00Z VFR, 9000 FEW010 SCT020 BKN050. No TAF for the time.\nForecast at your level (FL200 planned): showers or CB from LELL to SOPET (2 of 3 models); in cloud from 30 NM after coast-out (LELL) to VLC (all models); icing FL180\u2013FL220 from 8 NM after TORDU to 23 NM after VLC (2 of 3 models).\nRadar: no coverage along the route.\n1 alert while you flew: New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination).\nArrival LEMI: 10:00Z VFR, 9999 SCT025 BKN040. No TAF for the time.",
+    "lines": [
+      {
+        "kind": "departure",
+        "text": "Departure LELL: 08:00Z VFR, 9000 FEW010 SCT020 BKN050. No TAF for the time."
+      },
+      {
+        "kind": "forecast",
+        "text": "Forecast at your level (FL200 planned): showers or CB from LELL to SOPET (2 of 3 models); in cloud from 30 NM after coast-out (LELL) to VLC (all models); icing FL180\u2013FL220 from 8 NM after TORDU to 23 NM after VLC (2 of 3 models)."
+      },
+      {
+        "kind": "radar",
+        "text": "Radar: no coverage along the route."
+      },
+      {
+        "kind": "alerts",
+        "text": "1 alert while you flew: New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)."
+      },
+      {
+        "kind": "arrival",
+        "text": "Arrival LEMI: 10:00Z VFR, 9999 SCT025 BKN040. No TAF for the time."
+      }
+    ]
+  },
+  "strip": [
+    {
+      "from_nm": 0.0,
+      "to_nm": 9.8,
+      "at": "2026-10-02T08:02:08.028124+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 9.8,
+      "to_nm": 19.7,
+      "at": "2026-10-02T08:06:25.390782+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 19.7,
+      "to_nm": 29.5,
+      "at": "2026-10-02T08:10:42.753440+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 29.5,
+      "to_nm": 39.4,
+      "at": "2026-10-02T08:15:00.116098+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 39.4,
+      "to_nm": 49.2,
+      "at": "2026-10-02T08:19:17.478756+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 49.2,
+      "to_nm": 59.0,
+      "at": "2026-10-02T08:23:33.535004+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 59.0,
+      "to_nm": 68.9,
+      "at": "2026-10-02T08:27:50.897662+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 68.9,
+      "to_nm": 78.7,
+      "at": "2026-10-02T08:32:08.260320+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 78.7,
+      "to_nm": 88.6,
+      "at": "2026-10-02T08:36:25.622978+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 88.6,
+      "to_nm": 98.4,
+      "at": "2026-10-02T08:40:42.985636+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 98.4,
+      "to_nm": 108.3,
+      "at": "2026-10-02T08:45:00.348294+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 108.3,
+      "to_nm": 118.1,
+      "at": "2026-10-02T08:49:17.710952+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 118.1,
+      "to_nm": 127.9,
+      "at": "2026-10-02T08:53:33.767200+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 127.9,
+      "to_nm": 137.8,
+      "at": "2026-10-02T08:57:51.129858+00:00",
+      "forecast": "red",
+      "forecast_hazards": [
+        "showers"
+      ],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 137.8,
+      "to_nm": 147.6,
+      "at": "2026-10-02T09:02:08.492516+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 147.6,
+      "to_nm": 157.5,
+      "at": "2026-10-02T09:06:25.855174+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 157.5,
+      "to_nm": 167.3,
+      "at": "2026-10-02T09:10:43.217832+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 167.3,
+      "to_nm": 177.1,
+      "at": "2026-10-02T09:14:59.274080+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 177.1,
+      "to_nm": 187.0,
+      "at": "2026-10-02T09:19:16.636738+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 187.0,
+      "to_nm": 196.8,
+      "at": "2026-10-02T09:23:33.999396+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 196.8,
+      "to_nm": 206.7,
+      "at": "2026-10-02T09:27:51.362054+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 206.7,
+      "to_nm": 216.5,
+      "at": "2026-10-02T09:32:08.724712+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 216.5,
+      "to_nm": 226.4,
+      "at": "2026-10-02T09:36:26.087370+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 226.4,
+      "to_nm": 236.2,
+      "at": "2026-10-02T09:40:43.450028+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 236.2,
+      "to_nm": 246.0,
+      "at": "2026-10-02T09:44:59.506276+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 246.0,
+      "to_nm": 255.9,
+      "at": "2026-10-02T09:49:16.868934+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 255.9,
+      "to_nm": 265.7,
+      "at": "2026-10-02T09:53:34.231592+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    },
+    {
+      "from_nm": 265.7,
+      "to_nm": 275.6,
+      "at": "2026-10-02T09:57:51.594250+00:00",
+      "forecast": "green",
+      "forecast_hazards": [],
+      "observed": "no_data",
+      "radar_max_dbz": null,
+      "lightning": null
+    }
+  ],
+  "airports": [
+    {
+      "role": "departure",
+      "icao": "LELL",
+      "at": "2026-10-02T08:00:00+00:00",
+      "metar_station": null,
+      "taf_station": null,
+      "metar_raw": "METAR LELL 020800Z 36001KT 9000 FEW010 SCT020 BKN050 21/16 Q1027",
+      "metar_time": "2026-10-02T08:00:00+00:00",
+      "metar_category": "VFR",
+      "metar_conditions": "9000 FEW010 SCT020 BKN050",
+      "match": "unverifiable"
+    },
+    {
+      "role": "arrival",
+      "icao": "LEMI",
+      "at": "2026-10-02T10:00:00+00:00",
+      "metar_station": null,
+      "taf_station": null,
+      "metar_raw": "METAR LEMI 021000Z 05011KT 020V080 9999 SCT025 BKN040 24/20 Q1025",
+      "metar_time": "2026-10-02T10:00:00+00:00",
+      "metar_category": "VFR",
+      "metar_conditions": "9999 SCT025 BKN040",
+      "match": "unverifiable"
+    }
+  ],
+  "questions": [
+    {
+      "id": "icing-110-192",
+      "kind": "icing",
+      "text": "Icing was forecast between FL180 and FL220 from 8 NM after TORDU to 23 NM after VLC, around 09:06Z (2 of 3 models). You were at FL200 (planned). What did you get?",
+      "options": [
+        {
+          "id": "none",
+          "label": "None"
+        },
+        {
+          "id": "light",
+          "label": "Light"
+        },
+        {
+          "id": "moderate_plus",
+          "label": "Moderate or more"
+        },
+        {
+          "id": "not_in_cloud",
+          "label": "Not in cloud"
+        }
+      ],
+      "avoidable": true,
+      "stretch": {
+        "from_nm": 110.24000000000001,
+        "to_nm": 192.92000000000002,
+        "base_ft": 18000,
+        "top_ft": 22000,
+        "severity": "amber",
+        "models": [
+          "ecmwf",
+          "icon"
+        ],
+        "models_total": 3,
+        "advisories": [
+          "aircraft_icing"
+        ],
+        "kinds": [
+          "icing_band"
+        ]
+      },
+      "forecast": {
+        "ecmwf": {
+          "severity": "amber",
+          "base_ft": 18000,
+          "top_ft": 22000
+        },
+        "icon": {
+          "severity": "amber",
+          "base_ft": 18000,
+          "top_ft": 22000
+        }
+      },
+      "at": "09:06Z",
+      "flown_ft": 20000,
+      "flown_source": "planned",
+      "answer": null
+    },
+    {
+      "id": "cloud-55-165",
+      "kind": "cloud",
+      "text": "The forecast had you in cloud from 30 NM after coast-out (LELL) to VLC around 08:48Z (all models). You were at FL200 (planned). Were you?",
+      "options": [
+        {
+          "id": "in_cloud",
+          "label": "In cloud"
+        },
+        {
+          "id": "in_and_out",
+          "label": "In and out"
+        },
+        {
+          "id": "on_top",
+          "label": "On top"
+        },
+        {
+          "id": "below",
+          "label": "Below it"
+        },
+        {
+          "id": "clear",
+          "label": "No cloud"
+        }
+      ],
+      "avoidable": false,
+      "stretch": {
+        "from_nm": 55.120000000000005,
+        "to_nm": 165.36,
+        "base_ft": 19000,
+        "top_ft": 23000,
+        "severity": "amber",
+        "models": [
+          "ecmwf",
+          "gfs",
+          "icon"
+        ],
+        "models_total": 3,
+        "advisories": [
+          "vmc_cruise"
+        ],
+        "kinds": [
+          "cloud"
+        ]
+      },
+      "forecast": {
+        "ecmwf": {
+          "severity": "amber",
+          "base_ft": 19000,
+          "top_ft": 23000
+        },
+        "gfs": {
+          "severity": "amber",
+          "base_ft": 19000,
+          "top_ft": 23000
+        },
+        "icon": {
+          "severity": "amber",
+          "base_ft": 19000,
+          "top_ft": 23000
+        }
+      },
+      "at": "08:48Z",
+      "flown_ft": 20000,
+      "flown_source": "planned",
+      "answer": null
+    },
+    {
+      "id": "showers-0-137",
+      "kind": "showers",
+      "text": "Showers were forecast from LELL to SOPET around 08:30Z and radar had no coverage there. What did you see?",
+      "options": [
+        {
+          "id": "none",
+          "label": "Nothing"
+        },
+        {
+          "id": "showers",
+          "label": "Showers"
+        },
+        {
+          "id": "build_ups",
+          "label": "Build-ups or CB"
+        }
+      ],
+      "avoidable": true,
+      "stretch": {
+        "from_nm": 0,
+        "to_nm": 137.8,
+        "severity": "red",
+        "models": [
+          "ecmwf",
+          "icon"
+        ],
+        "models_total": 3,
+        "advisories": [
+          "convective"
+        ]
+      },
+      "forecast": {
+        "ecmwf": {
+          "severity": "red",
+          "base_ft": null,
+          "top_ft": null
+        },
+        "icon": {
+          "severity": "red",
+          "base_ft": null,
+          "top_ft": null
+        }
+      },
+      "at": "08:30Z",
+      "flown_ft": 20000,
+      "flown_source": "planned",
+      "answer": null
+    }
+  ],
+  "interest": {
+    "interesting": true,
+    "reasons": [
+      {
+        "kind": "forecast_at_level",
+        "hazards": [
+          "cloud",
+          "icing",
+          "showers"
+        ]
+      },
+      {
+        "kind": "alert_in_flight",
+        "count": 1
+      },
+      {
+        "kind": "questions",
+        "count": 3
+      }
+    ]
+  },
+  "alerts": [
+    {
+      "at": "2026-10-02T08:30:00+00:00",
+      "event": "raised",
+      "tier": "alert",
+      "message": "New SIGMET LECB 3 / LECM 3: EMBD TS from 08:35Z (at destination)",
+      "aircraft_nm": 68.9
+    }
+  ],
+  "orphan_answers": {}
+}
