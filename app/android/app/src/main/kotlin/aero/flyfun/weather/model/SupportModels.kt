@@ -309,56 +309,113 @@ data class ModelUsage(
 )
 
 // ============================================================================
-// Debrief
+// Debrief (#1023 server, #1024 UI)
 // ============================================================================
 
+/** A stored pilot debrief (`GET/PUT /api/flights/{id}/debrief`, inlined on `/api/flights`). */
 @Serializable
 data class DebriefResponse(
     @SerialName("flight_id")
     val flightId: String = "",
+    /** `flown` | `cancelled` | `monitoring`. */
+    val decision: String = "",
+    /** Cancel-reason tag ids (cancelled only). */
+    val reasons: List<String> = emptyList(),
+    /** Tag id -> `consistent` | `better` | `worse` (flown; derived from answers for `questions`). */
     val outcomes: Map<String, String> = emptyMap(),
-    @SerialName("other_text")
-    val otherText: String = "",
-    @SerialName("rating_overall")
-    val ratingOverall: Int? = null,
-    @SerialName("pack_timestamp")
-    val packTimestamp: String? = null,
+    val note: String? = null,
+    /** `questions` (the Debrief section) | `legacy` (the old form). */
+    val form: String? = null,
     @SerialName("created_at")
     val createdAt: String = "",
     @SerialName("updated_at")
     val updatedAt: String = "",
-    val taxonomy: DebriefTaxonomy = DebriefTaxonomy(),
 )
 
+/** Upsert body for `PUT /api/flights/{id}/debrief`. The section always sends `form = questions`. */
 @Serializable
 data class DebriefRequest(
-    val outcomes: Map<String, String>,
-    @SerialName("other_text")
-    val otherText: String = "",
-    @SerialName("rating_overall")
-    val ratingOverall: Int? = null,
+    val decision: String,
+    val reasons: List<String> = emptyList(),
+    val outcomes: Map<String, String> = emptyMap(),
+    val note: String? = null,
+    val form: String = "questions",
+)
+
+/**
+ * The post-flight report (#1023), `GET /api/flights/{id}/debrief/report` and the reply of
+ * `PUT .../debrief/answers`. Drawn as served (#1024): the headline, lines, question text and
+ * option labels are the server's words. Only what the Debrief section draws is decoded.
+ */
+@Serializable
+data class DebriefReport(
+    @SerialName("flight_id")
+    val flightId: String? = null,
+    val status: String? = null,
+    val message: String? = null,
+    val cancelled: Boolean = false,
+    val summary: DebriefSummary? = null,
+    val questions: List<DebriefQuestion> = emptyList(),
+) {
+    /** The server's headline, else its message (a report that could not be built says why). */
+    val headline: String? get() = summary?.headline?.takeIf { it.isNotBlank() } ?: message
+}
+
+@Serializable
+data class DebriefSummary(
+    val headline: String = "",
+    @SerialName("differs_from_forecast")
+    val differsFromForecast: Boolean = false,
+    val lines: List<DebriefLine> = emptyList(),
 )
 
 @Serializable
-data class DebriefTaxonomy(
-    val severities: List<TaxonomySeverity> = emptyList(),
-    val categories: List<TaxonomyCategory> = emptyList(),
+data class DebriefLine(
+    val kind: String = "",
+    val text: String = "",
 )
 
 @Serializable
-data class TaxonomySeverity(
-    val id: String = "",
+data class DebriefQuestion(
+    /** `kind-from_nm-to_nm`, e.g. `icing-110-192`. */
+    val id: String,
+    /** `icing` | `cloud` | `turbulence` | `showers`. */
+    val kind: String = "",
+    val text: String = "",
+    val options: List<DebriefOption> = emptyList(),
+    /** Whether "I changed level or route to stay out of it" is offered. */
+    val avoidable: Boolean = false,
+    val answer: DebriefAnswer? = null,
+)
+
+@Serializable
+data class DebriefOption(
+    val id: String,
     val label: String = "",
-    val hint: String = "",
 )
 
 @Serializable
-data class TaxonomyCategory(
-    val id: String = "",
-    val label: String = "",
-    val hint: String = "",
-    @SerialName("advisory_ids")
-    val advisoryIds: List<String> = emptyList(),
+data class DebriefAnswer(
+    val answer: String,
+    val avoided: Boolean = false,
+    val note: String? = null,
+    @SerialName("answered_at")
+    val answeredAt: String? = null,
+)
+
+/** Body of `PUT /api/flights/{id}/debrief/answers`. `answer = null` clears it. */
+@Serializable
+data class DebriefAnswersRequest(
+    val answers: List<DebriefAnswerItem>,
+)
+
+@Serializable
+data class DebriefAnswerItem(
+    @SerialName("question_id")
+    val questionId: String,
+    val answer: String?,
+    val avoided: Boolean = false,
+    val note: String? = null,
 )
 
 // ============================================================================

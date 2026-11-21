@@ -275,6 +275,14 @@ data class FlightResponse(
     @SerialName("raw_route")
     val rawRoute: String? = null,
     val section: String? = null,
+    /** The pilot's stored debrief, inlined for owned past flights. */
+    val debrief: DebriefResponse? = null,
+    /** #1023: the server built the debrief report at window close (owner only). */
+    @SerialName("debrief_ready")
+    val debriefReady: Boolean = false,
+    /** #1023: report questions still unanswered; drives the list's "Needs debrief" glyph (#1024). */
+    @SerialName("questions_open")
+    val questionsOpen: Int = 0,
     val role: FlightRole? = null,
     @SerialName("owner_display_name")
     val ownerDisplayName: String? = null,
@@ -324,6 +332,13 @@ data class FlightResponse(
     /** Server-computed section, falling back to date-based bucketing at the current clock time. */
     val flightSection: FlightSection
         get() = resolvedSection()
+
+    /**
+     * The list's "Needs debrief" glyph (#1024): owner only, while the server's report has open
+     * questions, or on a recent past flight with no debrief yet (the server's "recent" bucket).
+     */
+    val needsDebrief: Boolean
+        get() = isEditable && (questionsOpen > 0 || (flightSection == FlightSection.RECENT && debrief == null))
 
     /**
      * True once `departure + duration` has passed (`now > departure + duration`).

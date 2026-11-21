@@ -87,6 +87,9 @@ interface BriefingRepository {
     suspend fun debrief(flightId: String): DebriefResponse
     suspend fun saveDebrief(flightId: String, req: DebriefRequest): DebriefResponse
     suspend fun deleteDebrief(flightId: String)
+    /** The post-flight report (#1023, #1024). */
+    suspend fun debriefReport(flightId: String): DebriefReport
+    suspend fun saveDebriefAnswers(flightId: String, req: DebriefAnswersRequest): DebriefReport
 
     // PIREPs
     suspend fun submitPirep(req: SubmitPirepRequest): PirepResponse
@@ -287,6 +290,12 @@ open class OnlineBriefingRepository(
 
     override suspend fun deleteDebrief(flightId: String) =
         api.deleteDebrief(flightId)
+
+    override suspend fun debriefReport(flightId: String): DebriefReport =
+        api.getDebriefReport(flightId)
+
+    override suspend fun saveDebriefAnswers(flightId: String, req: DebriefAnswersRequest): DebriefReport =
+        api.saveDebriefAnswers(flightId, req)
 
     override suspend fun submitPirep(req: SubmitPirepRequest): PirepResponse =
         api.submitPirep(req)

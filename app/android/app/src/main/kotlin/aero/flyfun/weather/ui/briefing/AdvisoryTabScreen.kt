@@ -78,9 +78,6 @@ import aero.flyfun.weather.model.AlternateRequirement
 import aero.flyfun.weather.model.AlternatesResponse
 import aero.flyfun.weather.model.Assessment
 import aero.flyfun.weather.model.BriefingTab
-import aero.flyfun.weather.model.DebriefRequest
-import aero.flyfun.weather.model.DebriefResponse
-import aero.flyfun.weather.model.DebriefTaxonomy
 import aero.flyfun.weather.model.DigestResponse
 import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.FocusIntent
@@ -93,6 +90,7 @@ import aero.flyfun.weather.model.RouteAdvisoryResult
 import aero.flyfun.weather.model.TimeCandidate
 import aero.flyfun.weather.model.TimeOptionsResponse
 import aero.flyfun.weather.model.TimeScanJobStatus
+import aero.flyfun.weather.model.rules.DebriefSectionRules
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 import java.util.Locale
 import kotlin.math.abs
@@ -119,7 +117,7 @@ fun AdvisoryTabScreen(
     val alternatesState by viewModel.alternates.collectAsState()
     val timeOptions by viewModel.timeOptions.collectAsState()
     val debrief by viewModel.debrief.collectAsState()
-    val debriefTaxonomy by viewModel.debriefTaxonomy.collectAsState()
+    val debriefReport by viewModel.debriefReport.collectAsState()
     val liveLayer by viewModel.liveLayer.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
@@ -219,13 +217,14 @@ fun AdvisoryTabScreen(
                     }
 
                     val currentFlight = flight
-                    if (currentFlight != null && (currentFlight.isPast() || debrief != null)) {
+                    // #1024: the card links to the Debrief section on the Observed tab.
+                    if (currentFlight != null && currentFlight.isEditable && (currentFlight.isPast() || debrief != null)) {
                         DebriefCard(
                             debrief = debrief,
-                            taxonomy = debriefTaxonomy ?: debrief?.taxonomy,
-                            advisories = advisories,
-                            onSubmit = { req -> viewModel.submitDebrief(req) },
-                            onDelete = { viewModel.deleteDebrief() },
+                            questionsOpen = debriefReport?.let { DebriefSectionRules.openQuestions(it) }
+                                ?: currentFlight.questionsOpen,
+                            canOpen = debriefReport != null,
+                            onOpen = { viewModel.selectTab(BriefingTab.OBSERVED) },
                         )
                     }
                 }
@@ -585,249 +584,6 @@ private fun DigestFeedbackRow(
                         },
                     ) {
                         Text("Send")
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-internal fun DebriefCard(
-    debrief: DebriefResponse?,
-    taxonomy: DebriefTaxonomy?,
-    advisories: AdvisoriesResponse?,
-    onSubmit: (DebriefRequest) -> Unit,
-    onDelete: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var isEditing by rememberSaveable { mutableStateOf(false) }
-
-    val existingDecision = debrief?.outcomes?.get("decision") ?: "flown"
-    var decision by rememberSaveable(debrief) { mutableStateOf(existingDecision) }
-    var noteText by rememberSaveable(debrief) { mutableStateOf(debrief?.otherText.orEmpty()) }
-    val outcomesMap = remember(debrief) {
-        mutableStateMapOf<String, String>().apply {
-            debrief?.outcomes?.forEach { (k, v) ->
-                if (k != "decision") put(k, v)
-            }
-        }
-    }
-
-    val categories = remember(taxonomy, advisories) {
-        val taxCats = taxonomy?.categories.orEmpty()
-        if (taxCats.isNotEmpty()) {
-            taxCats
-        } else {
-            listOf(
-                aero.flyfun.weather.model.TaxonomyCategory(id = "icing", label = "Icing"),
-                aero.flyfun.weather.model.TaxonomyCategory(id = "turbulence", label = "Turbulence"),
-                aero.flyfun.weather.model.TaxonomyCategory(id = "clouds", label = "Clouds & Ceiling"),
-                aero.flyfun.weather.model.TaxonomyCategory(id = "winds", label = "Winds"),
-                aero.flyfun.weather.model.TaxonomyCategory(id = "convective", label = "Convection"),
-                aero.flyfun.weather.model.TaxonomyCategory(id = "visibility", label = "Visibility"),
-            )
-        }
-    }
-
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = "Post-Flight Debrief",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                TextButton(onClick = { isEditing = !isEditing }) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(if (isEditing) "Close" else if (debrief == null) "Add Debrief" else "Edit")
-                }
-            }
-
-            if (!isEditing) {
-                if (debrief != null) {
-                    val dec = debrief.outcomes["decision"] ?: "flown"
-                    val decLabel = when (dec) {
-                        "cancelled" -> "Cancelled"
-                        "monitoring" -> "Monitoring only"
-                        else -> "Flown"
-                    }
-                    val decColor = when (dec) {
-                        "cancelled" -> BriefingPalette.Red
-                        "monitoring" -> BriefingPalette.Unavailable
-                        else -> BriefingPalette.Green
-                    }
-                    Surface(
-                        color = decColor.copy(alpha = 0.14f),
-                        shape = RoundedCornerShape(50),
-                    ) {
-                        Text(
-                            text = decLabel,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = decColor,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                        )
-                    }
-                    val tagEntries = debrief.outcomes.filterKeys { it != "decision" }
-                    if (tagEntries.isNotEmpty()) {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            tagEntries.forEach { (catId, outcomeVal) ->
-                                val catName = categories.firstOrNull { it.id == catId }?.label ?: catId
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    shape = RoundedCornerShape(50),
-                                ) {
-                                    Text(
-                                        text = "$catName: $outcomeVal",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    if (debrief.otherText.isNotBlank()) {
-                        Text(
-                            text = debrief.otherText,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                } else {
-                    Text(
-                        text = "How did this flight go? Record whether you flew, cancelled, or were monitoring, plus condition tags to calibrate future forecasts.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            } else {
-                // Decision selector: Flown / Cancelled / Monitoring
-                Text(
-                    text = "What happened?",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
-                        "flown" to "Flown",
-                        "cancelled" to "Cancelled",
-                        "monitoring" to "Monitoring",
-                    ).forEach { (id, label) ->
-                        FilterChip(
-                            selected = decision == id,
-                            onClick = { decision = id },
-                            label = { Text(label) },
-                        )
-                    }
-                }
-
-                if (decision != "monitoring") {
-                    Text(
-                        text = if (decision == "cancelled") "Contributing conditions:" else "Conditions encountered:",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        categories.forEach { cat ->
-                            val currentVal = outcomesMap[cat.id]
-                            val isSelected = currentVal != null
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = {
-                                    if (decision == "cancelled") {
-                                        if (isSelected) outcomesMap.remove(cat.id) else outcomesMap[cat.id] = "reason"
-                                    } else {
-                                        val next = when (currentVal) {
-                                            null -> "as_forecast"
-                                            "as_forecast" -> "worse"
-                                            "worse" -> "better"
-                                            else -> null
-                                        }
-                                        if (next == null) outcomesMap.remove(cat.id) else outcomesMap[cat.id] = next
-                                    }
-                                },
-                                label = {
-                                    val suffix = if (decision == "flown" && currentVal != null) " ($currentVal)" else ""
-                                    Text("${cat.label}$suffix")
-                                },
-                            )
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = noteText,
-                    onValueChange = { noteText = it },
-                    label = { Text("Notes (optional)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 2,
-                    maxLines = 4,
-                )
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Button(
-                        onClick = {
-                            val combined = LinkedHashMap<String, String>()
-                            combined["decision"] = decision
-                            combined.putAll(outcomesMap)
-                            onSubmit(
-                                DebriefRequest(
-                                    outcomes = combined,
-                                    otherText = noteText.trim(),
-                                ),
-                            )
-                            isEditing = false
-                        },
-                    ) {
-                        Text("Save Debrief")
-                    }
-
-                    if (debrief != null) {
-                        OutlinedButton(
-                            onClick = {
-                                onDelete()
-                                isEditing = false
-                            },
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteOutline,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Delete")
-                        }
                     }
                 }
             }
