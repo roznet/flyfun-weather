@@ -24,6 +24,7 @@ import pytest
 
 from flyfun_common import autorouter as autorouter_api
 
+from weatherbrief.api import debriefs as debriefs_api
 from weatherbrief.api import devices as devices_api
 from weatherbrief.api import feedback as feedback_api
 from weatherbrief.api import flights as flights_api
@@ -73,6 +74,9 @@ REQUEST_DTOS = {
     "FeedbackRequest": feedback_api.FeedbackRequest,
     "AutorouterLinkTicketRequest": autorouter_api.LinkTicketRequest,
     "AutorouterLinkCompleteRequest": autorouter_api.LinkCompleteRequest,
+    "DebriefRequest": debriefs_api.DebriefRequest,
+    "DebriefAnswersRequest": debriefs_api.AnswersRequest,
+    "DebriefAnswerItem": debriefs_api.AnswerItem,
 }
 
 # Request keys the server ignores. Add nothing here: fix the client.

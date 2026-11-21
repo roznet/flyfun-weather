@@ -408,6 +408,12 @@ class CachingBriefingRepository(
     override suspend fun deleteDebrief(flightId: String) =
         online.deleteDebrief(flightId)
 
+    override suspend fun debriefReport(flightId: String): DebriefReport =
+        online.debriefReport(flightId)
+
+    override suspend fun saveDebriefAnswers(flightId: String, req: DebriefAnswersRequest): DebriefReport =
+        online.saveDebriefAnswers(flightId, req)
+
     override suspend fun submitPirep(req: SubmitPirepRequest): PirepResponse =
         online.submitPirep(req)
 

@@ -618,6 +618,14 @@ class ApiClient(
     suspend fun deleteDebrief(flightId: String) =
         delete("/api/flights/${encodePathSegment(flightId)}/debrief")
 
+    /** The post-flight report (#1023), built by the server on each call. */
+    suspend fun getDebriefReport(flightId: String): DebriefReport =
+        get("/api/flights/${encodePathSegment(flightId)}/debrief/report")
+
+    /** Store answers; the server folds them into the debrief and returns the rebuilt report. */
+    suspend fun saveDebriefAnswers(flightId: String, req: DebriefAnswersRequest): DebriefReport =
+        put("/api/flights/${encodePathSegment(flightId)}/debrief/answers", req)
+
     // ========================================================================
     // Shared Flights & Trips
     // ========================================================================

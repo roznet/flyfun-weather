@@ -8,6 +8,7 @@ import aero.flyfun.weather.model.LiveFocus
 import aero.flyfun.weather.model.rules.AirportCardRules
 import aero.flyfun.weather.model.rules.ObservedLayoutRules
 import aero.flyfun.weather.service.FlightTrackingService
+import aero.flyfun.weather.ui.briefing.DebriefSection
 import aero.flyfun.weather.ui.briefing.SectionSpyBar
 import aero.flyfun.weather.ui.briefing.SpySection
 import aero.flyfun.weather.ui.theme.AssessmentAmber
@@ -293,6 +294,8 @@ fun ObservedTabScreen(
                 // flight strip → alert lines → highlight (or headline) → airport cards → ribbon → Details.
                 item(key = "summary") {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // #1024: after the window, the server's debrief report and its questions.
+                        DebriefSection(viewModel = viewModel)
                         val glance = liveLayer?.glance
                         val layout = remember(glance) { glance?.let { ObservedLayoutRules.layout(it) } }
                         glance?.flight?.text?.takeIf { it.isNotBlank() }?.let { ObservedFlightStrip(it) }

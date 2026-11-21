@@ -79,6 +79,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -710,6 +712,25 @@ private fun FlightRowCard(
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                    // #1024: the server's open debrief questions; the row opens the briefing,
+                    // whose Observed tab opens on the Debrief section.
+                    if (flight.needsDebrief) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            modifier = Modifier
+                                .testTag("needsDebrief-${flight.id}")
+                                .semantics { contentDescription = "Needs debrief" },
+                        ) {
+                            Text(
+                                text = "Debrief",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                             )
                         }
                     }

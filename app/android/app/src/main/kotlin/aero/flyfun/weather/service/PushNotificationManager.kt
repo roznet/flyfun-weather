@@ -62,6 +62,8 @@ object PushNotificationManager {
     private const val TYPE_LIVE_ALERT: String = "live_alert"
     private const val TYPE_LIVE_CLEAR: String = "live_clear"
     private const val TYPE_FLIGHT_DAY: String = "flight_day"
+    /** The post-flight debrief push (#1023): opens the Observed tab's Debrief section (#1024). */
+    private const val TYPE_DEBRIEF: String = "debrief"
 
     private const val PREFS_NAME: String = "flyfun_push_prefs"
     private const val KEY_DEVICE_TOKEN: String = "registered_device_token"
@@ -241,7 +243,7 @@ object PushNotificationManager {
         val type = data["type"]?.lowercase()
         val isLive = type == TYPE_LIVE_ALERT || type == TYPE_LIVE_CLEAR
         val openObservedRaw = data[EXTRA_OPEN_OBSERVED] ?: data["openObserved"]
-        val openObserved = isLive ||
+        val openObserved = isLive || type == TYPE_DEBRIEF ||
             openObservedRaw.equals("true", ignoreCase = true) ||
             openObservedRaw.equals("1", ignoreCase = true)
         val channel = when {
@@ -249,6 +251,7 @@ object PushNotificationManager {
             type == TYPE_LIVE_ALERT && data["interruption_level"] == "active" -> CHANNEL_LIVE_CLEAR
             type == TYPE_LIVE_ALERT -> CHANNEL_LIVE_WEATHER_ALERTS
             type == TYPE_FLIGHT_DAY -> CHANNEL_FLIGHT_DAY
+            type == TYPE_DEBRIEF -> CHANNEL_BRIEFING_ALERTS
             openObserved -> CHANNEL_LIVE_WEATHER_ALERTS
             else -> CHANNEL_BRIEFING_ALERTS
         }
