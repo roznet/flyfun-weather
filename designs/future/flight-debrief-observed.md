@@ -15,7 +15,8 @@ stop being their own feature and become part of the flight debrief. Builds on
 
 ## 1. Premise
 
-PIREPs never took off: the UI is hidden behind `PirepFeature.isEnabled = false` and
+PIREPs never took off: the UI was hidden behind `PirepFeature.isEnabled = false` (and is
+removed since #1024, §9) and
 the community-feed value only appears once many pilots report, which a small user
 base never reaches. The incentive was wrong: "report so others benefit" pays nothing
 to the reporter on most flights.
@@ -71,7 +72,7 @@ only you could see. Reports fill exactly the gaps the observations leave.
 | Live-window tick | `tasks/live_tick.py` (dep − 3 h … arr + 1 h), `commit_live_update` | Where the per-tick display snapshot is written (§5.1) |
 | Flight progress | `analysis/flight_progress.FlightProgress`, `live_layer.flight_progress`, `progress.at(t)` | The recap's time base; observed sources (#759) plug in inside it |
 | Debrief | `flight_debriefs`, `debriefs/taxonomy.py`, `DebriefCard` (iOS Advisory tab), `debrief-form.ts` | Outcomes get pre-filled from the recap; the recap and reports are shown with the debrief |
-| Report storage + offline queue | `PirepRow`, `api/pireps.py`, iOS `PirepOfflineStore`, client UUID dedupe | Bookmarks are `PirepRow`s; offline queue unchanged |
+| Report storage + offline queue | `PirepRow`, `api/pireps.py`, client UUID dedupe (the iOS `PirepOfflineStore` queue was removed in #1024) | Bookmarks are `PirepRow`s; a client offline queue would need rebuilding |
 | Retention exemption | `tasks/retention.py`: packs linked to a report skip all tiers | The forecast the pilot flew with survives with the report |
 
 ## 4. The debrief, in layers
@@ -253,12 +254,20 @@ saw, and the instruments' view at the same place and time.
 
 ## 9. Removing the PIREP surfaces
 
+Done in #1024, on Android too (`PirepReportingSheet`, `PirepOfflineStore`, the PIREP
+models and API calls). The owner then decided PIREPs will not happen, so the client
+surfaces were deleted outright rather than replaced.
+
 - iOS: `BriefingTab.pireps` and its tab, the toolbar "Report PIREP", the flight-list
   "Add PIREP" context menu, `PirepListView` (replaced by §8), `PirepReportingView`
-  (replaced by the bookmark row + the debrief edit card), `PirepFeature`.
+  (replaced by the bookmark row + the debrief edit card), `PirepFeature`, and with
+  them `PirepViewModel` and the `PirepOfflineStore` queue (leftover queue files are
+  deleted on sign-in).
 - Web: the hidden briefing PIREPs panel (`#pireps-wrapper`, `loadFlightPireps`), the
-  standalone `pireps.html` page and its nav entry; `pirep-map.ts` is kept for §11.
-- Server: the API stays (extended in §6). `list_pireps` gains a "mine" query for §8.
+  standalone `pireps.html` page and its nav entry. `pirep-map.ts` was deleted too, not
+  kept for §11; if §11 is ever built, recover it from git history (present at commit
+  71a09abb on this branch and on origin/main before #1024).
+- Server: the API stays (the §6 extensions and the §8 "mine" query are not built).
 - Release notes: the PIREP UI was never public, so nothing is "removed" from the
   user's point of view.
 
@@ -295,7 +304,7 @@ Notes:
   a map `focus` kind `report`. Highlights only, no alerts, until there is data to
   calibrate an alert on (live alerts are kept scarce by design).
 - A "Pilot reports" layer on the web maps Now tab (bbox fetch, the lightning layer as
-  template, markers from `pirep-map.ts`), and a toggle on the iOS route map. iOS has
+  template, markers from `pirep-map.ts`, deleted in #1024 — see §9), and a toggle on the iOS route map. iOS has
   no Now map; building one is separate work.
 - The `pireps.md` presentation rules stay: older than ~90 min flagged, never hidden;
   "no reports" never reads as clear; the situational-awareness disclaimer in the UI.

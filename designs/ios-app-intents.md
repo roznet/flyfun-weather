@@ -28,7 +28,7 @@ Intents path.
 - [Overview](./ios-app-overview.md) — current implementation status
 - [Architecture](./ios-app-architecture.md) — MVVM + Repository, auth, deep links
 - [Briefing Refresh Notifications](./ios-app-briefing-notifications.md) — APNs push on refresh-complete; **prerequisite** for the refresh intent to close its loop
-- [Roadmap](./ios-app-roadmap.md) — phase context (this is a Phase-1/2 cross-cut, adjacent to the Phase-3a voice-PIREP work)
+- [Roadmap](./ios-app-roadmap.md) — phase context (this is a Phase-1/2 cross-cut; the Phase-3a voice-PIREP work it sat next to was dropped, PIREP client UI removed in #1024)
 - Server sibling: `src/weatherbrief/mcp/server.py` — the MCP tools these intents mirror
 
 ## Why App Intents (and the one hard constraint)

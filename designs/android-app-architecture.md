@@ -10,7 +10,7 @@
 | **Language & Build** | **Kotlin 2.4.20 (JVM 17) / AGP 9.4.1 / Gradle 9.4.1** | Coroutines, `StateFlow`, `kotlinx.serialization` (`1.8.0`), strong null-safety. |
 | **UI** | **Jetpack Compose (BOM `2026.09.00`) + Material 3 + Coil (`2.7.0`)** | Declarative UI, adaptive phone/tablet layouts (`BoxWithConstraints` >= `840.dp` split view), AndroidX `viewModel(viewModelStoreOwner, key)` lifecycle scoping (see §4), immediate-mode `Canvas` for all meteorological plots. Never uses Android dynamic wallpaper colors (`dynamicColor = false`) so semantic weather colors stay unambiguous. |
 | **Networking** | **OkHttp 4.12 + `okhttp-sse` + `kotlinx.serialization`** | Built-in connection pooling, host-scoped `RollingBearerInterceptor` for `X-Renewed-Token` rotation, streaming gzipped `/bundle` downloads, and SSE `/packs/refresh` progress streams. |
-| **Persistence** | **File-based JSON (`BriefingCache`, `PirepOfflineStore`) + `AndroidTokenStore` (Android Keystore AES-GCM) + SQLite (`airports.db`)** | Matches iOS cache-the-pack architecture (`filesDir/BriefingCache/users/<scope>/<flightId>/<timestamp>/<endpoint>.json` + shared `charts/<cacheKey>.<ext>` with 50 MB LRU cap). |
+| **Persistence** | **File-based JSON (`BriefingCache`) + `AndroidTokenStore` (Android Keystore AES-GCM) + SQLite (`airports.db`)** | Matches iOS cache-the-pack architecture (`filesDir/BriefingCache/users/<scope>/<flightId>/<timestamp>/<endpoint>.json` + shared `charts/<cacheKey>.<ext>` with 50 MB LRU cap). |
 | **Maps** | **Custom Web Mercator `SlippyMapCanvas`** | Pure Compose `Canvas` tile + vector renderer with in-memory `LruCache<String, ImageBitmap>` and OkHttp 30 MB disk cache. Matches web/iOS tile convention (`web/ts/visualization/map-tiles.ts`): Stadia `alidade_smooth_dark` in dark mode, Stadia `alidade_smooth` in muted light mode (when radar/satellite overlay is active), and OSM in standard light mode (with `Referer: https://weather.flyfun.aero/`). |
 | **Project Location** | `app/android/` in `flyfun-weather` repo | Monorepo alongside backend (`src/weatherbrief/`), web (`web/`), and iOS (`app/flyfun-weather/`). |
 
@@ -29,9 +29,9 @@ app/android/
 └── app/                       # Android application module (applicationId + namespace aero.flyfun.weather)
     └── src/main/kotlin/aero/flyfun/weather/
         ├── model/             # @Serializable API DTOs, VizData, Assessment, rules/
-        ├── data/              # ApiClient, AndroidTokenStore, BriefingRepository, BriefingCache, PirepOfflineStore
+        ├── data/              # ApiClient, AndroidTokenStore, BriefingRepository, BriefingCache
         ├── viewmodel/         # AppStateViewModel, FlightListViewModel, BriefingViewModel, CrossSectionViewModel, MapViewModels
-        ├── ui/                # theme/, auth/, flights/, trips/, aircraft/, briefing/, crosssection/, skewt/, map/, observed/, pirep/, help/
+        ├── ui/                # theme/, auth/, flights/, trips/, aircraft/, briefing/, crosssection/, skewt/, map/, observed/, help/
         └── service/           # FlightTrackingService, PushNotificationManager
 ```
 

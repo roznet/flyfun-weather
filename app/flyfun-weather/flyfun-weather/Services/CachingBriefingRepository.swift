@@ -463,19 +463,6 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.activeRefreshes()
     }
 
-    func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse {
-        try await online.submitPirep(request)
-    }
-
-    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] {
-        try await online.submitPirepsBatch(requests)
-    }
-
-    func fetchPireps(flightId: String) async throws -> PirepListResponse {
-        // Always online — PIREPs are live community data, not cached
-        try await online.fetchPireps(flightId: flightId)
-    }
-
     // Debrief + digest feedback are always online (post-flight, on-the-ground
     // actions — not part of the offline briefing bundle).
     func fetchDebrief(flightId: String) async throws -> DebriefResponse {

@@ -43,8 +43,8 @@ final class FlightTrackingService: NSObject {
     /// landing auto-stop, so the server can record the landing (#761). Not
     /// called on a manual stop or the past-window auto-stop.
     @ObservationIgnored var onLanding: (@MainActor ([LivePositionFix]) -> Void)?
-    /// Called with each one-shot fix taken outside tracking (the PIREP form,
-    /// the fix taken when a flight is opened), so it reaches the server too (#761).
+    /// Called with each one-shot fix taken outside tracking (the map's locate
+    /// button, the fix taken when a flight is opened), so it reaches the server too (#761).
     @ObservationIgnored var onOneShotFix: (@MainActor (LivePositionFix) -> Void)?
 
     private var locationManager: CLLocationManager?
@@ -57,8 +57,8 @@ final class FlightTrackingService: NSObject {
     private var airborneSeen = false
     private var lastProjectionTime: Date = .distantPast
     private let projectionThrottleInterval: TimeInterval = 5.0
-    /// A one-shot `requestLocation()` is in flight (PIREP pre-fill outside an
-    /// active route track). Cleared once a fix (or failure) lands.
+    /// A one-shot `requestLocation()` is in flight (outside an active route
+    /// track). Cleared once a fix (or failure) lands.
     private var oneShotActive = false
 
     // MARK: - Start / Stop
@@ -109,9 +109,8 @@ final class FlightTrackingService: NSObject {
     }
 
     /// Request a single current-position fix WITHOUT starting full route
-    /// tracking. Populates `currentLocation` (and its altitude) so the PIREP
-    /// reporting form can pre-fill lat/lon/altitude even when the pilot hasn't
-    /// tapped "Start" — the entry point is no longer gated on an active track.
+    /// tracking. Populates `currentLocation` (and its altitude) even when the
+    /// pilot hasn't tapped "Start".
     /// No-op while already tracking, since the live track already updates
     /// `currentLocation`. `prompt: false` never asks for permission: without
     /// it already granted, nothing happens (the fix taken on opening a flight).
@@ -121,12 +120,8 @@ final class FlightTrackingService: NSObject {
             let status = (locationManager ?? CLLocationManager()).authorizationStatus
             guard status == .authorizedWhenInUse || status == .authorizedAlways else { return }
         }
-        // Drop any prior fix so a *stale* position can't be pre-filled before the
-        // fresh one lands. The reporting form reads `currentLocation` synchronously
-        // on appear (to seed altitude), and this service instance is shared across
-        // repeated sheet presentations — without this reset, the second PIREP of a
-        // flight would silently inherit the first one's altitude and the fresh fix
-        // (delivered async) would be discarded by the "only fill when nil" guard.
+        // Drop any prior fix so a *stale* position can't be read before the
+        // fresh one lands (a reader that fills only when nil would keep it).
         currentLocation = nil
         let manager = locationManager ?? CLLocationManager()
         manager.delegate = self

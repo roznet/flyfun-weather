@@ -31,25 +31,23 @@ Observation created
   Mark .synced
 ```
 
-- **Queue** — observations persist in SwiftData with `syncStatus = .local` (aspirational: the app imports SwiftData nowhere; see the implementation note below)
+- **Queue** — observations persist in SwiftData with `syncStatus = .local` (aspirational: the app imports SwiftData nowhere and has no observation queue; see the implementation note below)
 - **Retry** — on connectivity change (`NWPathMonitor`), flush the queue
 - **Conflict** — server is append-only for observations. No conflict resolution needed (each observation is immutable once created; amendments are new observations linked to the original)
 - **Backpressure** — if queue grows large (extended offline), batch in chunks of 50
 
 ### Real-time sharing (Starlink-connected pilots)
 
-> Status: spec only (Phase 3c). Neither the app nor the server has any WebSocket code — grep for `WebSocket` returns nothing in `app/` or `src/weatherbrief/`. PIREP exchange is HTTP-only (`POST /api/pireps`, `POST /api/pireps/batch`, bounds/airport queries).
+> Status: spec only (Phase 3c). Neither the app nor the server has any WebSocket code — grep for `WebSocket` returns nothing in `app/` or `src/weatherbrief/`. The server's PIREP API is HTTP-only (`POST /api/pireps`, `POST /api/pireps/batch`, bounds/airport queries) and has no client since #1024.
 
 - **WebSocket** connection kept alive during flight session
 - Outbound: observations pushed immediately on creation
 - Inbound: server relays nearby observations from other active flights
 - Fallback to polling if WebSocket unavailable
 
-### Current implementation note (Phase 3 M1)
+### Current implementation note
 
-`PirepOfflineStore` actor writes the queue to a JSON file (`pending_pireps.json`) in Documents (not SwiftData yet). Offline detection lives on `APIError.isTransientNetwork`: it unwraps `case .networkError(let inner)`, casts `inner as? URLError`, and only treats an allowlist of codes as offline (`.notConnectedToInternet`, `.timedOut`, `.networkConnectionLost`, `.cannotConnectToHost`) — `APIClient` wraps URL errors in `APIError.networkError`, so the raw `URLError.code` is on the inner error, not the top level. `PirepViewModel.submit` catches `where apiError.isTransientNetwork`, calls `offlineStore.enqueue(request)`, and shows a synthetic `PirepResponse.offline`. After a *successful* online submit (connectivity just confirmed) it calls `offlineStore.sync(using: repository)`, which drains the whole queue in one `submitPirepsBatch` call (no chunking yet — server dedups via `client_uuid`). `sync` is all-or-nothing: any throw leaves the entire queue intact and returns 0, so a single bad request can't be isolated. The queue file is written `.completeFileProtectionUntilFirstUserAuthentication` (pilot-authored content + positions, encrypted at rest) and deliberately *not* backup-excluded — these are unsent submissions, not regenerable cache. `clear()` drops queue + file on account deletion.
-
-A `NetworkMonitor` (wraps `NWPathMonitor`, `@MainActor @Observable`, on `AppState`) now exists, but it is **not** wired to flush the PIREP queue — it only gates Wi-Fi-only auto-download (`BriefingViewModel`) and drives offline UI hints (`FlightListViewModel`, `BriefingViewModel`). The queue is still flushed on just two triggers: (1) the successful-submit path above, and (2) `AppState.syncPendingPireps()` (calls `offlineStore.load()` then `sync(using:)`), invoked from `WeatherBriefApp` on `scenePhase == .active` — i.e. the queue retries when the app is foregrounded, not on a connectivity-restored event, even though the monitor could now supply such an event.
+None of the sync engine is built. The one queue that existed, the iOS PIREP offline queue (`PirepOfflineStore`, flushed by `AppState.syncPendingPireps`), was removed with the PIREP client UI in #1024; the server's `POST /api/pireps/batch` is kept. On sign-in `AppState.discardPirepQueues` deletes any leftover `PendingPireps/` directory and legacy `pending_pireps.json` from Documents. Offline detection for other calls lives on `APIError.isTransientNetwork` (unwraps `.networkError(let inner)` and allowlists `URLError` codes `.notConnectedToInternet`, `.timedOut`, `.networkConnectionLost`, `.cannotConnectToHost`). `NetworkMonitor` (wraps `NWPathMonitor`, on `AppState`) gates Wi-Fi-only auto-download and drives offline UI hints; nothing uses it to flush a queue.
 
 ## Prompting Engine (Phase 3b — Detailed Spec)
 
@@ -135,4 +133,4 @@ This is why cross-section data is part of the lightweight sync payload — it's 
 - [Features](./ios-app-features.md) — trigger types and prompt UX
 - [UI](./ios-app-ui.md) — prompted report card layout
 - [Data Models](./ios-app-data-models.md) — `ForecastSummary`/`ObservationResponse` were never built; live tracking state (`ProjectedPosition`, `TrackingRoutePoint`) is in-memory only, nothing persisted
-- Key code paths: `app/flyfun-weather/flyfun-weather/Services/{PirepOfflineStore,NetworkMonitor,FlightTrackingService}.swift`, `ViewModels/PirepViewModel.swift`, `App/AppState.swift` (`syncPendingPireps`)
+- Key code paths: `app/flyfun-weather/flyfun-weather/Services/{NetworkMonitor,FlightTrackingService}.swift`, `App/AppState.swift` (`discardPirepQueues`)

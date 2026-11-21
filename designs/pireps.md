@@ -3,6 +3,10 @@
 > Crowdsourced pilot weather reports for European airspace — as-built (M0/M1).
 > Forward-looking milestones (watches/notifications, model validation) remain in
 > [future/pirep-plan.md](./future/pirep-plan.md).
+>
+> **Status:** the owner decided not to pursue PIREPs. The client UI (iOS, Android,
+> web) was removed in #1024; the server side described here (API, storage,
+> `pireps` table, preference flags, retention exemption) is kept.
 
 ## Intent
 
@@ -33,8 +37,8 @@ keeps the provenance claim true.
 `PirepRow` is deliberately **flat** — no session or track entity. A PIREP is a
 discrete point observation, optionally linked to a flight via `pack_id` and to an
 aircraft via `aircraft_id`. Client-generated UUIDs make submission idempotent, so
-the iOS offline queue can retry without creating duplicates (see
-[ios-app-data-models.md](./ios-app-data-models.md)).
+an offline queue can retry without creating duplicates (the iOS and Android
+queues that used this were removed with the client UI in #1024).
 
 Fields follow the US PIREP structure plus ceiling/tops additions: location + time
 (GPS), altitude (FL, GPS-prefilled and editable), aircraft type (from the user
@@ -79,7 +83,8 @@ attached to a pack is only visible to viewers entitled to that flight
 ## Presentation rules that are design, not polish
 
 These come from the "attention-director, never a verdict" posture and should not
-be optimised away:
+be optimised away. No client shows PIREPs since #1024; they apply to any future
+PIREP UI:
 
 - **Staleness is explicit.** Reports older than ~90 min are flagged visually and
   **never quietly hidden** — a hidden stale report reads as "no hazard".
@@ -120,5 +125,4 @@ but is unused — see retention note above);
 ## References
 
 - Endpoint contract and spatial queries: [ios-app-server-api.md](./ios-app-server-api.md)
-- iOS offline queue: [ios-app-sync-prompting.md](./ios-app-sync-prompting.md)
 - Unbuilt milestones (watches, notifications, validation dataset): [future/pirep-plan.md](./future/pirep-plan.md)

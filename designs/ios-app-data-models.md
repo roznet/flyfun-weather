@@ -68,7 +68,6 @@ One file per server response. Names below are the actual Swift type names.
   cross-section scrim/verdict-ribbon geometry), `AdvisoryCatalogEntry`, `AdvisoryParameterDef`, and
   airport-condition types (`AirportConditions`, `AirportConditionsSummary`, `RunwayEnd`,
   `AirportModelCondition`, `RunwayWind`).
-- `PirepResponse` + `PirepListResponse` + `SubmitPirepRequest` (`PirepResponse.swift`) — see PIREPs.
 - Other response files (one struct family each): `DigestResponse`, `ElevationResponse`,
   `PreferencesResponse`, `RefreshEvent` (SSE) + `ActiveRefreshResponse`, `SoundingProfileResponse`,
   `AdvisoryDetailResponse`, `AirportWeatherResponse`, `AlternatesResponse`, `AutorouterRoute`,
@@ -118,9 +117,6 @@ Two `actor`s hold the model-bearing state:
   (`pruneStalePacks(olderThanDays:)`) lives on `CachingBriefingRepository`, not on the store** —
   it's a cache-only path that never makes a request; `AppState.pruneStaleCache()` drives it on
   foreground.
-- `PirepOfflineStore` (`PirepOfflineStore.swift`) — `actor`. JSON-file queue of unsent
-  `SubmitPirepRequest`s at `Documents/pending_pireps.json`. `enqueue` on failure, `sync(using:)`
-  flushes via a batch submit. Server dedups on `clientUuid`.
 
 `CachingBriefingRepository` wraps the network `BriefingRepository` + `BriefingCacheStore` to make
 the data layer offline-capable (see `ios-app-architecture.md`).
@@ -134,20 +130,12 @@ and `AirportDatabase` (downloaded `airports.db` in Application Support, opened v
 by RZFlight's `KnownAirports` for offline ICAO autocomplete — read-only reference data, ETag-
 refreshed; no cached copy simply means empty suggestions, never a broken search).
 
-## PIREPs — flat model, not first-class "Observations"
+## No observation model
 
 The old design's `Observation` / `FlightSession` / `TrackPoint` SwiftData entities and their enums
-(`ObservationSource`, `PromptTrigger`, `ForecastSummary`, etc.) were **never built**. PIREPs today
-are a single flat API struct:
-
-- `PirepResponse` — server PIREP. Key fields: `id: Int`, `clientUuid: String?`, `submittedAt`,
-  `observedAt`, `latitude`/`longitude`, `gpsAltitudeFt?`, `reportedAltitudeFt?`, `inCloud?`,
-  `icingIntensity?`/`icingType?`, `turbulenceIntensity?`, `ceilingMslFt?`, `topsMslFt?`/`topsBasis?`,
-  `tempC?`, `windDir?`/`windSpeedKt?`, `remarks?`, `aircraftType?`, `packId?`, `source`, `isOwn`.
-  Computed `altitude` (reported ?? GPS), `observedDate`, `maxSeverity`; `.offline` sentinel.
-- `SubmitPirepRequest` — submit body; `clientUuid` is client-generated for idempotent offline sync
-  (the one surviving idea from the old "client UUIDs" choice). `source` defaults to `"inflight"`.
-- `PirepListResponse` — `items` + `count`.
+(`ObservationSource`, `PromptTrigger`, `ForecastSummary`, etc.) were **never built**. The flat PIREP
+structs that stood in for them (`PirepResponse`, `PirepListResponse`, `SubmitPirepRequest`) and the
+`PirepOfflineStore` queue were removed with the PIREP client UI in #1024; the server API is kept.
 
 There is no client-side session/track-point persistence model. `FlightTrackingService`
 (`Services/`) holds live GPS state (`ProjectedPosition`, `TrackingRoutePoint`) in memory, not as a
@@ -156,13 +144,11 @@ persisted entity.
 ## Key Choices
 
 - **No SwiftData** — persistence is hand-rolled JSON-on-disk (`BriefingCacheStore`,
-  `PirepOfflineStore`, `HelpCatalogStore`, `WhatsNewStore`) plus UserDefaults for small flags.
+  `HelpCatalogStore`, `WhatsNewStore`) plus UserDefaults for small flags.
   Chosen over a DB for the cache-the-pack model: what's cached is whole server responses, keyed by
   flight+timestamp, so a file tree is the natural shape and there is nothing to query.
 - **API structs are the source of truth** — Domain `Viz*` structs are derived per-render; nothing is
   persisted in Domain shape.
-- **Client UUIDs for PIREPs** — `SubmitPirepRequest.clientUuid` lets the offline queue retry without
-  duplicating server-side.
 - **Pack completeness gate** — a cached pack only counts as offline-ready once all five
   `requiredEndpoints` are on disk.
 
@@ -171,7 +157,7 @@ persisted entity.
 - [Architecture](./ios-app-architecture.md) — MVVM + Repository, the caching repo, layer split.
   Its persistence row agrees: file-based JSON + UserDefaults, no SwiftData.
 - [Server API](./ios-app-server-api.md) — server-side shapes these structs decode.
-- [Sync & Prompting](./ios-app-sync-prompting.md) — PIREP offline-sync flow.
+- [Sync & Prompting](./ios-app-sync-prompting.md) — offline-sync spec (unbuilt).
 
 ## Live observation cache (#637)
 

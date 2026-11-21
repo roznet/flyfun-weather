@@ -55,7 +55,6 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     var interpretRouteResult: Result<InterpretRouteResponse, Error> = .failure(MockError.notStubbed("interpretRoute"))
     /// Unstubbed by default, so the forecast map VM falls back to its D+0…D+3 grid.
     var forecastDaysResult: Result<ForecastDaysResponse, Error> = .failure(MockError.notStubbed("forecastDays"))
-    var submitPirepsBatchResult: Result<[PirepResponse], Error> = .success([PirepResponse.offline])
     /// Queued outcomes for successive `postLivePosition` calls (#761); empty
     /// means the call is not stubbed. Every request is recorded.
     var postLivePositionResults: [Result<LivePositionResult, Error>] = []
@@ -120,7 +119,6 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
 
     // Call counters + captured args for behaviour assertions.
     private(set) var flightsCallCount = 0
-    private(set) var submitPirepsBatchCallCount = 0
     private(set) var interpretRouteCallCount = 0
     /// One per `updateFlight` call — the post-move residual PATCH retries, so a
     /// test needs to see how many attempts a given failure bought.
@@ -379,12 +377,6 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         activeRefreshesCallCount += 1
         return activeRefreshesResult
     }
-    func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse { throw MockError.notStubbed("submitPirep") }
-    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] {
-        submitPirepsBatchCallCount += 1
-        return try submitPirepsBatchResult.get()
-    }
-    func fetchPireps(flightId: String) async throws -> PirepListResponse { throw MockError.notStubbed("fetchPireps") }
     func fetchDebrief(flightId: String) async throws -> DebriefResponse { throw MockError.notStubbed("fetchDebrief") }
     func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse {
         upsertedDebriefs.append(request)
@@ -573,17 +565,6 @@ func makeInterpretResponse(
         offRoute: offRoute,
         waypoints: waypoints
     )
-}
-
-func makePirepRequest(remarks: String = "test") -> SubmitPirepRequest {
-    // Base is a fixed, safe JSON literal; set caller-controlled `remarks` on the
-    // decoded value so a string with quotes/backslashes can't break the JSON.
-    let json = """
-    {"observed_at": "2026-06-24T12:00:00Z", "latitude": 43.5, "longitude": 6.95, "source": "inflight"}
-    """
-    var request = try! JSONDecoder.weatherBrief.decode(SubmitPirepRequest.self, from: Data(json.utf8))
-    request.remarks = remarks
-    return request
 }
 
 /// A one-shot async gate: `wait()` suspends until another task calls `open()`.

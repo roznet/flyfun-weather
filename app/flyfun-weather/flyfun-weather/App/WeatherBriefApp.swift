@@ -63,7 +63,6 @@ struct WeatherBriefApp: App {
                     // first — same seam as `onOpenURL`. Synchronous so the flight
                     // list sees it before its own `.task` load runs.
                     appState.consumePendingNavigation()
-                    Task { await appState.syncPendingPireps() }
                     // Refresh prefs, then reconcile push against iOS's actual
                     // authorization so the toggle/pref match reality (and a rotated
                     // APNs token is re-registered). Chained so reconcile reads fresh

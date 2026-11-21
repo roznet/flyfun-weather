@@ -182,11 +182,6 @@ protocol BriefingRepository: Sendable {
     /// live flight-list "Updating…" indicator. Online-only.
     func activeRefreshes() async throws -> [ActiveRefreshResponse]
 
-    // PIREP
-    func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse
-    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse]
-    func fetchPireps(flightId: String) async throws -> PirepListResponse
-
     // Debrief (post-flight judgement on a past flight, owner-only)
     /// Load a flight's debrief. Throws `APIError.notFound` (404) when none exists.
     func fetchDebrief(flightId: String) async throws -> DebriefResponse
@@ -617,20 +612,6 @@ final class OnlineBriefingRepository: BriefingRepository {
         // Polled every 5s while the list is visible — suppress its request log
         // so it doesn't flood the console.
         try await client.request("/api/refresh/active", quietLog: true)
-    }
-
-    func submitPirep(_ request: SubmitPirepRequest) async throws -> PirepResponse {
-        let body = try JSONEncoder.weatherBrief.encode(request)
-        return try await client.request("/api/pireps", method: "POST", body: body)
-    }
-
-    func submitPirepsBatch(_ requests: [SubmitPirepRequest]) async throws -> [PirepResponse] {
-        let body = try JSONEncoder.weatherBrief.encode(requests)
-        return try await client.request("/api/pireps/batch", method: "POST", body: body)
-    }
-
-    func fetchPireps(flightId: String) async throws -> PirepListResponse {
-        return try await client.requestURL("/api/pireps?flight_id=\(Self.queryValueEncoded(flightId))")
     }
 
     func fetchDebrief(flightId: String) async throws -> DebriefResponse {

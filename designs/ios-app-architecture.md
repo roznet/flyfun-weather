@@ -8,7 +8,7 @@
 |--------|----------|-----------|
 | **Min iOS** | **26.2** (`IPHONEOS_DEPLOYMENT_TARGET`) | Latest SwiftUI, `@Observable`, new MapKit SwiftUI APIs. No legacy burden. |
 | **UI** | **SwiftUI** | Native, declarative. No UIKit wrappers unless absolutely necessary. |
-| **Persistence** | **File-based JSON + UserDefaults** | No SwiftData. `BriefingCacheStore` (actor, on-disk pack cache under Application Support), `PirepOfflineStore` (JSON queue in Documents), `UserPreferencesStore`/`AppSettingsStore`/`WhatsNewStore` (UserDefaults). Simpler than a DB for our cache-the-pack model. The one SQLite is `AirportDatabase` — a slim `airports.db` **downloaded** from `GET /api/nav/airports-db` (ETag-refreshed, not bundled: it churns per AIRAC), read through RZFlight's `KnownAirports`/FMDB for offline ICAO autocomplete. |
+| **Persistence** | **File-based JSON + UserDefaults** | No SwiftData. `BriefingCacheStore` (actor, on-disk pack cache under Application Support), `UserPreferencesStore`/`AppSettingsStore`/`WhatsNewStore` (UserDefaults). Simpler than a DB for our cache-the-pack model. The one SQLite is `AirportDatabase` — a slim `airports.db` **downloaded** from `GET /api/nav/airports-db` (ETag-refreshed, not bundled: it churns per AIRAC), read through RZFlight's `KnownAirports`/FMDB for offline ICAO autocomplete. |
 | **Networking** | **URLSession + async/await** | Built-in, no third-party dep. SSE refresh via `URLSession.bytes`. |
 | **Maps** | **MapKit (`MKMapView` via `UIViewRepresentable`)** | Both the briefing route map and the forecast map are `MKMapView`-backed (converged in #428) so the airport-forecast marker layer is shared, not duplicated per map — the SwiftUI `Map` API janks at the forecast map's ~620-annotation scale. |
 | **Architecture** | **MVVM + Repository** | Natural fit for SwiftUI. Repos abstract API vs cache — offline-ready from day one. |
@@ -26,8 +26,8 @@
 │   WeatherBrief Companion        │  SwiftUI, iOS 26.2+
 │                                 │
 │  ┌──────────┐ ┌──────────────┐  │
-│  │ Briefing │ │  PIREP       │  │
-│  │ Viewer   │ │  Reporter    │  │
+│  │ Briefing │ │  Observed /  │  │
+│  │ Viewer   │ │  Debrief     │  │
 │  └────┬─────┘ └──────┬───────┘  │
 │       │              │          │
 │  ┌────┴──────────────┴──────┐   │
@@ -62,7 +62,7 @@ No WebSocket client. Live refresh progress streams over **Server-Sent Events** (
 
 All data flows through `BriefingRepository` (`Services/BriefingRepository.swift`), which abstracts over network vs cache. UI and ViewModels depend only on the protocol.
 
-The protocol is one per-endpoint async method (returning the `*Response` Codable types from `Models/API/`), not a single `BriefingPayload`. It has grown well past the briefing itself — roughly: flights CRUD (`flights`, `flight`, `createFlight`, `updateFlight`, `moveFlight`, `deleteFlight`, `bulkDeleteFlights`), route entry (`parseFpl`, `interpretRoute`, `routeDistance`, `autorouterRoutes`, plus `autorouterLinkURL`/`unlinkAutorouter` for in-app linking), aircraft (`aircraft`, `searchAircraftTypes`, `createAircraft`, `updateAircraft`, `deleteAircraft`)/profiles/`usageSummary`, sharing (`flightByShareCode`, `subscribeFlight`, `unsubscribeFlight`), standalone weather (`airportWeather`, `forecastMap`, `forecastDays`, `frequentAirports`, `historicalMap`, `historicalRange`), packs (`packs`/`latestPack`), pack-data fetchers (`advisories`, `advisoryDetail`, `recalculateAdvisories`, `digest`, `snapshot`, `routeAnalyses`, `elevation`, `soundingProfile`, `timeOptions`/`confirmTimeOption`/`rescanTimeOptions`), image fetchers (`skewtImage`, `grametImage`, and since #799 `grametDocument`, `chartImage`, `chartOverlay` — these three have protocol-extension defaults that throw `notFound`, so fixtures/mocks needn't implement them), refresh (`refreshStream` SSE, `refreshStatus`, `triggerRefresh`, `activeRefreshes`), PIREP (`submitPirep`, `submitPirepsBatch`, `fetchPireps`), debrief (`fetchDebrief`, `upsertDebrief`, `deleteDebrief`) and feedback. Adding an endpoint means touching every conformer — keep that in mind before widening the protocol.
+The protocol is one per-endpoint async method (returning the `*Response` Codable types from `Models/API/`), not a single `BriefingPayload`. It has grown well past the briefing itself — roughly: flights CRUD (`flights`, `flight`, `createFlight`, `updateFlight`, `moveFlight`, `deleteFlight`, `bulkDeleteFlights`), route entry (`parseFpl`, `interpretRoute`, `routeDistance`, `autorouterRoutes`, plus `autorouterLinkURL`/`unlinkAutorouter` for in-app linking), aircraft (`aircraft`, `searchAircraftTypes`, `createAircraft`, `updateAircraft`, `deleteAircraft`)/profiles/`usageSummary`, sharing (`flightByShareCode`, `subscribeFlight`, `unsubscribeFlight`), standalone weather (`airportWeather`, `forecastMap`, `forecastDays`, `frequentAirports`, `historicalMap`, `historicalRange`), packs (`packs`/`latestPack`), pack-data fetchers (`advisories`, `advisoryDetail`, `recalculateAdvisories`, `digest`, `snapshot`, `routeAnalyses`, `elevation`, `soundingProfile`, `timeOptions`/`confirmTimeOption`/`rescanTimeOptions`), image fetchers (`skewtImage`, `grametImage`, and since #799 `grametDocument`, `chartImage`, `chartOverlay` — these three have protocol-extension defaults that throw `notFound`, so fixtures/mocks needn't implement them), refresh (`refreshStream` SSE, `refreshStatus`, `triggerRefresh`, `activeRefreshes`), debrief (`fetchDebrief`, `upsertDebrief`, `deleteDebrief`) and feedback. Adding an endpoint means touching every conformer — keep that in mind before widening the protocol.
 
 ```swift
 protocol BriefingRepository: Sendable { ... }
@@ -83,13 +83,13 @@ final class FixtureBriefingRepository: BriefingRepository { ... }
 
 | Layer | Responsibility | Key Components |
 |-------|---------------|----------------|
-| **UI** | SwiftUI views, cockpit-optimized | `Views/` — Briefing (container, advisory dashboard + detail, digest, alternates, timing scenarios, route observations/SIGMETs, debrief, PIREP list/reporting, shared-flight preview), CrossSection (Canvas renderer + `Layers/` stack + Skew-T), RouteGraph (Swift Charts), Map + ForecastMap (both MapKit), Flights, Help/What's-New, Auth, Shared (theme, markdown-lite, marker sizing) |
-| **ViewModels** | State management (`@Observable`) | `FlightListViewModel`, `BriefingViewModel`, `CrossSectionViewModel`, `RouteMapViewModel`, `ForecastMapViewModel`, `HistoricalMapViewModel`, `RouteForecastOverlayModel`, `PirepViewModel`, `DebriefViewModel`, `AddFlightViewModel`, `DepartureTimeModel`, `RouteAutocompleteController` |
+| **UI** | SwiftUI views, cockpit-optimized | `Views/` — Briefing (container, advisory dashboard + detail, digest, alternates, timing scenarios, route observations/SIGMETs, debrief, shared-flight preview), CrossSection (Canvas renderer + `Layers/` stack + Skew-T), RouteGraph (Swift Charts), Map + ForecastMap (both MapKit), Flights, Help/What's-New, Auth, Shared (theme, markdown-lite, marker sizing) |
+| **ViewModels** | State management (`@Observable`) | `FlightListViewModel`, `BriefingViewModel`, `CrossSectionViewModel`, `RouteMapViewModel`, `ForecastMapViewModel`, `HistoricalMapViewModel`, `RouteForecastOverlayModel`, `DebriefViewModel`, `AddFlightViewModel`, `DepartureTimeModel`, `RouteAutocompleteController` |
 | **Repositories** | Data access (API vs cache) | `BriefingRepository` (Online/Caching/Fixture impls) |
 | **Domain** | Forecast/assessment view models | `Assessment`, `VizData`, `FlightDuration` (`Models/Domain/`); API DTOs in `Models/API/` |
 | **Location** | Live aircraft position projected onto route. `FlightTrackingService` wraps `CLLocationManager` at `kCLLocationAccuracyBest`. | `FlightTrackingService` (Core Location) |
-| **Storage** | Offline-first persistence | `BriefingCacheStore` (actor, on-disk pack cache), `PirepOfflineStore` (queued PIREPs), `UserPreferencesStore`/`AppSettingsStore`/`WhatsNewStore` (UserDefaults), `HelpCatalogStore`, `AirportDatabase` (downloaded SQLite) |
-| **Sync** | Server communication, auth, queue flush | `APIClient` (wraps `RollingBearerSession` from FlyFunCommon), `KeychainBearerTokenStore` (FlyFunCommon), `NetworkMonitor`, SSE refresh, PIREP batch flush |
+| **Storage** | Offline-first persistence | `BriefingCacheStore` (actor, on-disk pack cache), `UserPreferencesStore`/`AppSettingsStore`/`WhatsNewStore` (UserDefaults), `HelpCatalogStore`, `AirportDatabase` (downloaded SQLite) |
+| **Sync** | Server communication, auth, queue flush | `APIClient` (wraps `RollingBearerSession` from FlyFunCommon), `KeychainBearerTokenStore` (FlyFunCommon), `NetworkMonitor`, SSE refresh, live-position fix queue (`LivePositionService`). The PIREP UI, its offline queue and batch flush were removed in #1024 (server API kept). |
 | **System surfaces** | Siri/Shortcuts/Spotlight + APNs | `AppIntents/` (see [App Intents](./ios-app-intents.md)), `Services/PushNotifications.swift` (see [Briefing notifications](./ios-app-briefing-notifications.md)). Both foreground the app through the same `PendingNavigation` seam deep links use. |
 
 ## Authentication Flow

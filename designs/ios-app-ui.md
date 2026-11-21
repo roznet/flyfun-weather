@@ -6,8 +6,9 @@
 Briefing Viewer layout are the design intent that shipped (in tabbed form — see
 below). The "In-Flight Mode", "In-Flight Map", and the two report-card mockups
 (Prompted Report Card, Full Report Sheet) are the *original Phase 3 vision* and
-do NOT match what was built. The shipped PIREP UI is a single manual reporting
-sheet — see [As-built PIREP sheet](#as-built-pirep-reporting-sheet) at the end.
+do NOT match what was built. The PIREP UI that did ship (one manual reporting
+sheet and a PIREPs tab, hidden since #661) was removed in #1024; the app has no
+PIREP surface now (the server API is kept).
 Cross-check `ios-app-overview.md` ("Current Implementation Status") before
 treating any mockup here as current code.
 
@@ -63,24 +64,18 @@ Planning/viewer mode — default when not in an active flight session. What the 
 │  └──────────────────────────────────────────────────┘    │
 │                                                          │
 ├──────────────────────────────────────────────────────────┤
-│ [Advisory] [Discussion] [Cross-Section] [Map] [PIREPs]   │  Tab bar
+│ [Advisory] [Discussion] [Cross-Section] [Map] [Observed] │  Tab bar
 └──────────────────────────────────────────────────────────┘
 ```
 
 > **Tab reorganization (#310, current).** The mega-scroll "Brief" tab was split
 > and the standalone Skew-T tab folded away. Tabs are now
-> **Advisory · Discussion · Cross-Section · Map** (`BriefingTab.core`, + a gated
-> **PIREPs** tab when `pirepCanView` **or** `pirepCanPublish` — a publisher
-> reaches it without view permission because that is where the permanent "Report
-> a PIREP" action lives). This is a partial, intentional reversal of the
+> **Advisory · Discussion · Cross-Section · Map** (`BriefingTab.tabs(showsObserved:)`,
+> + **Observed** appended on flight day, #661). This is a partial, intentional reversal of the
 > §4.1 "one narrative scroll" decision — the single scroll stays the iPhone
 > *fallback shape*, but content is regrouped into purpose-built tabs. Settings is
-> still reached from the flight-list ellipsis menu; the PIREP reporting sheet is
-> a ⋯ menu item (shown whenever `pirepCanPublish`, no flight-window gate), not
-> a tab — plus a "Report a PIREP" action on the PIREPs tab and an "Add PIREP"
-> flight-list context-menu item (the latter additionally gated on `isEditable`
-> **and** the flight's tracking window, so a list-filed report actually links to
-> the flight — see §PIREP sheet).
+> still reached from the flight-list ellipsis menu. The gated PIREPs tab and the
+> PIREP reporting entries (⋯ menu, flight-list "Add PIREP") were removed in #1024.
 
 | Tab | Contents (code) |
 |---|---|
@@ -150,7 +145,7 @@ nav-bar toolbar. The trailing side is fixed (#996): Start/Stop (inside the
 tracking window) and ↻ from `BriefingToolbarView`, then one ⋯ menu
 (`briefingMoreMenu`, labelled "Flight actions" so it never matches a "More"
 button query) holding Edit / Duplicate, Share Link and the Notifications
-submenu, Send Feedback and Report PIREP; rows that don't apply are left out, so
+submenu and Send Feedback; rows that don't apply are left out, so
 icons no longer come and go. The subtitle is kept only for coverage flights;
 otherwise the Advisory tab opens with `FlightSummaryStrip` (ends and times, date,
 duration, level, aircraft, tappable route; live off/est/landed times once the
@@ -267,7 +262,7 @@ Original intent: primary view while flying — dominates the screen. Pilot needs
 
 ## Prompted Report Card (Phase 3b vision — NOT built)
 
-> **Not implemented.** There is no forecast-triggered prompt card, no pre-selection, and no `confirmed/denied/edited/dismissed` response model. `SubmitPirepRequest`/`PirepResponse` carry no `response` field. The shipped sheet deliberately starts every field **unselected** ("no confirmation bias" — see overview doc), the opposite of the pre-selection drawn here. Kept as original design intent.
+> **Not implemented.** There is no forecast-triggered prompt card, no pre-selection, and no `confirmed/denied/edited/dismissed` response model. The PIREP sheet that did ship (removed in #1024) had no `response` field and deliberately started every field **unselected** ("no confirmation bias"), the opposite of the pre-selection drawn here. Kept as original design intent.
 
 Original concept: compact — focuses on the specific trigger, doesn't show every field. Shows what forecast predicted, confirms or edits, done.
 
@@ -292,7 +287,7 @@ Original concept: compact — focuses on the specific trigger, doesn't show ever
 
 ## Full Report Sheet (Phase 3a vision — superseded by the as-built sheet)
 
-> The mockup below (flight-rules / visibility / precip / "All correct" shortcut, all pre-populated from forecast) was **not** built as drawn. The shipped sheet is documented in [As-built PIREP reporting sheet](#as-built-pirep-reporting-sheet). Kept for design intent.
+> The mockup below (flight-rules / visibility / precip / "All correct" shortcut, all pre-populated from forecast) was **not** built as drawn. The simpler sheet that shipped instead was removed in #1024 (see [As-built PIREP reporting sheet](#as-built-pirep-reporting-sheet)). Kept for design intent.
 
 Original concept: when pilot taps "Report" manually. All fields pre-populated from forecast at current position:
 
@@ -327,18 +322,11 @@ Original concept: when pilot taps "Report" manually. All fields pre-populated fr
 
 ## As-built PIREP reporting sheet
 
-`PirepReportingView` (driven by `PirepViewModel`), reachable whenever `pirepCanPublish` — from the briefing ⋯ menu and the PIREPs-tab "Report a PIREP" action (permanent, no flight-window gate), or the flight-list "Add PIREP" context menu (additionally gated on the flight's tracking window **and** `isEditable`). **Linkage caveat:** `submit` sends no `pack_id`, so the server attaches a report to a flight only when its `observed_at` is inside the window **and** the report's `user_id` is the flight owner's; the list entry is gated on both window and ownership for that reason, while an in-briefing report is kept as standalone community data when filed outside the window or by a subscriber on a shared flight. One manual `Form` sheet, severity fields start **unselected**, GPS pre-fills only altitude/position via `FlightTrackingService` — the sheet requests a one-shot fix on appear (`requestOneShotLocation()`) so pre-fill works without an active track. Toolbar cancel button is labelled "Skip". `Form` sections, in order:
-
-- **Altitude** — read-only GPS altitude row + editable "Reported altitude" (ft) text field (pre-filled from GPS on appear)
-- **Icing** — severity picker (none/trace/light/moderate/severe); if non-none, an icing-**type** picker appears (rime/clear/mixed)
-- **Turbulence** — severity picker (none/light/moderate/severe)
-- **Cloud** — just an "In cloud?" Yes/No toggle
-- **Optional** — cloud tops (ft MSL) with a tops-**basis** picker (crossed/estimated_above/below_min), ceiling (ft MSL), wind dir (°) + speed (kt), temperature (°C). All free-entry.
-- **Remarks** — optional free-text field
-- (No flight-rules, visibility, or precip fields; no "All correct" shortcut)
-- **Submit** ("Submit Report" button) — state machine: idle/error → loading → loaded ("Saved offline — will sync when connected" when no connectivity) with "Submit Another" / "Done". "Submit Another" resets the form (incl. reported altitude) **and re-requests a one-shot GPS fix**, so each report in a multi-PIREP session gets a fresh position rather than reusing the first fix (which `requestLocation()` auto-stops after). Offline submissions set `queuedOffline` and enqueue to `PirepOfflineStore` to flush on reconnect.
-
-Severity color mapping (`severityPicker`): none→green, trace/light→yellow, moderate→orange, severe→red. This is the real cockpit color coding referenced by the constraints above.
+Removed in #1024 with the rest of the PIREP client UI (owner decided not to pursue PIREPs; the
+server's `/api/pireps` stays). It was `PirepReportingView` + `PirepViewModel`: one manual `Form`
+sheet (altitude, icing + type, turbulence, in-cloud, optional tops/basis, ceiling, wind,
+temperature, remarks), severity fields starting **unselected**, GPS pre-fill from a one-shot fix,
+and an offline queue. Recover it from git history if PIREPs return.
 
 ## UI-test fixtures (shared with Android)
 

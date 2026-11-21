@@ -104,7 +104,7 @@ before it reaches the server). OAuth sign-in uses the `flyfunweather://` scheme.
 
 - **Privacy policy:** `https://weather.flyfun.aero/privacy.html`.
 - **Account deletion:** in-app at Settings → Delete Account (`DELETE /auth/account`,
-  also clears the local briefing cache and PIREP queue); web URL
+  also clears the local briefing cache); web URL
   `https://weather.flyfun.aero/privacy.html#account-deletion` (the web app has
   the same Settings action).
 - **App access:** briefings need sign-in. Give reviewers a `scope: review` token
@@ -121,7 +121,9 @@ before it reaches the server). OAuth sign-in uses the `flyfunweather://` scheme.
   - *Collected:* email address and name (account management, app functionality);
     precise location, only while the pilot runs flight tracking, sent to the
     server and kept with the flight (app functionality); other user content —
-    flights, aircraft, debriefs, PIREPs, feedback (app functionality).
+    flights, aircraft, debriefs, feedback (app functionality). PIREPs left
+    this list when #1024 removed the PIREP client UI; drop them from the Play
+    form if it still lists them.
     FCM push token (device or other IDs; app functionality).
   - *Shared:* none (LLM and weather providers act as service providers).
   - *Encrypted in transit:* yes. *Deletion:* yes, in-app plus the web URL.

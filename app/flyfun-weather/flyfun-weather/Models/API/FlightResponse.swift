@@ -179,9 +179,8 @@ nonisolated struct FlightResponse: Codable, Identifiable, Sendable {
 
     /// Whether `now` falls in the flight's tracking window: departure −2h to
     /// departure + duration + 2h. This is the single source of truth for that
-    /// window — the briefing view (Start/Stop, PIREP button) and the flight list
-    /// ("Add PIREP" gate) both use it instead of reimplementing the formula, and
-    /// it mirrors the server's PIREP-linkage window in `storage/pireps.py`.
+    /// window — the briefing view's Start/Stop uses it instead of reimplementing
+    /// the formula, and it mirrors the server's flight window in `storage/pireps.py`.
     ///
     /// `started`: the flight is started and not yet landed on this device
     /// (`LivePositionService.isStartedNotLanded`). Its window then stays open

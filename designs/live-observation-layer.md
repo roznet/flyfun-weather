@@ -439,7 +439,7 @@ the ↻ path's fallback classification, and `replay_live_history.py score-estima
     early moves every ETA an hour early until the next fix. (Was
     `max(planned, fix + 10 min)`, #761.) The server cannot see the button:
     the iOS app sends no fix for a flight before Start is pressed on it (the
-    fix on opening, the PIREP form's and the map's locate button all wait
+    fix on opening and the map's locate button both wait
     for `grantConsent`), so the first ground fix is the press. Owner,
     2026-10-22: Start is pressed once in the aircraft, from boarding to just
     before take-off; the 3 h window start stays the only bound. An explicit

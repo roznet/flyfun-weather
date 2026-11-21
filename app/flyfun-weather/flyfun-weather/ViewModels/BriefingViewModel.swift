@@ -12,9 +12,8 @@ import OSLog
 ///   *appended*: the familiar tabs keep their positions whatever the day, and
 ///   the one that comes and goes sits at the right edge.
 ///
-/// Five is the iPhone bottom-bar limit before iOS folds tabs into "More", which
-/// is one reason PIREPs is gone from the bar (`PirepFeature`). On iPad they
-/// render as a top tab bar. Skew-T folds under Cross-Section (scrolled to).
+/// Five is the iPhone bottom-bar limit before iOS folds tabs into "More". On
+/// iPad they render as a top tab bar. Skew-T folds under Cross-Section (scrolled to).
 enum BriefingTab: String, Hashable, CaseIterable {
     case advisory
     case discussion
@@ -23,15 +22,11 @@ enum BriefingTab: String, Hashable, CaseIterable {
     /// Appended on flight day; declared in display order so `allCases` agrees
     /// with the tab bar.
     case observed
-    /// Hidden while `PirepFeature.isEnabled` is false (#661); kept so the
-    /// feature can come back without re-plumbing.
-    case pireps
 
     /// The tab bar for a briefing, in order.
-    static func tabs(showsObserved: Bool, showsPireps: Bool = false) -> [BriefingTab] {
+    static func tabs(showsObserved: Bool) -> [BriefingTab] {
         var tabs: [BriefingTab] = [.advisory, .discussion, .crossSection, .map]
         if showsObserved { tabs.append(.observed) }
-        if showsPireps { tabs.append(.pireps) }
         return tabs
     }
 
@@ -42,7 +37,6 @@ enum BriefingTab: String, Hashable, CaseIterable {
         case .discussion: "Discussion"
         case .crossSection: "Cross-Section"
         case .map: "Map"
-        case .pireps: "PIREPs"
         }
     }
 
@@ -53,17 +47,8 @@ enum BriefingTab: String, Hashable, CaseIterable {
         case .discussion: "text.alignleft"
         case .crossSection: "chart.xyaxis.line"
         case .map: "map"
-        case .pireps: "cloud.sun"
         }
     }
-}
-
-/// PIREPs never took off (#661): the tab, the briefing toolbar's "Report PIREP"
-/// and the flight list's "Add PIREP" are hidden for everyone, admins included,
-/// whatever the account's `pirep_can_*` flags say. The code, the offline queue
-/// flush and the server API stay; flip this to bring the UI back.
-enum PirepFeature {
-    static let isEnabled = false
 }
 
 /// Shared deep-link payload (§4.6/§4.7/§4.9): one `focusIntent` consumed by the
@@ -159,7 +144,6 @@ final class BriefingViewModel {
     /// The pack `routeFronts` belongs to, so a pack switch drops the previous
     /// pack's boundaries at once instead of drawing them until the fetch lands.
     private var routeFrontsTimestamp: String?
-    private(set) var pirepsState: LoadingState<[PirepResponse]> = .idle
 
     // Timing scenarios (#357) — the latest poll result, or nil when the flight
     // has Flexibility `none` / the pack predates the feature (404). Online-only:
@@ -1495,22 +1479,5 @@ final class BriefingViewModel {
         }
         guard pack?.fetchTimestamp == timestamp else { return }
         routeFronts = result
-    }
-
-    func loadPireps() async {
-        pirepsState = .loading
-        do {
-            let response = try await repository.fetchPireps(flightId: flight.id)
-            pirepsState = .loaded(response.items)
-        } catch let apiError as APIError where apiError.isCancellation {
-            // Task was cancelled (view disappeared / superseded) — benign, not a
-            // failure. Leave state as .loading so the next .task run reloads.
-            Self.logger.debug("PIREP load cancelled — ignoring")
-        } catch is CancellationError {
-            Self.logger.debug("PIREP load cancelled — ignoring")
-        } catch {
-            pirepsState = .error(error)
-            Self.logger.error("Failed to load PIREPs: \(error)")
-        }
     }
 }

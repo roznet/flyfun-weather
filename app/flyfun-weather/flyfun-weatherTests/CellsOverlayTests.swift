@@ -324,9 +324,4 @@ struct BriefingTabTests {
     func flightDay() {
         #expect(BriefingTab.tabs(showsObserved: true) == [.advisory, .discussion, .crossSection, .map, .observed])
     }
-
-    @Test("PIREPs are off for everyone")
-    func pirepsHidden() {
-        #expect(PirepFeature.isEnabled == false)
-    }
 }

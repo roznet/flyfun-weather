@@ -156,9 +156,8 @@ struct FlightGroupingTests {
     }
 }
 
-/// `FlightResponse.isInTrackingWindow` — the shared window used by the briefing
-/// Start/Stop + PIREP controls and the flight-list "Add PIREP" gate, and the
-/// window the server links a pack_id-less PIREP by. Pins the boundaries so a
+/// `FlightResponse.isInTrackingWindow` — the window the briefing's Start/Stop
+/// uses, mirroring the server's flight window. Pins the boundaries so a
 /// future edit can't silently drift the ±2h edges.
 @Suite("FlightTrackingWindow")
 struct FlightTrackingWindowTests {

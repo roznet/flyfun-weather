@@ -1,7 +1,7 @@
 /** HewsonGridLayer — paints one colored rect per (lat, lon) cell of a
  * Hewson snapshot onto a canvas overlay.
  *
- * Templated on the FogOfWarLayer pattern in pirep-map.ts: a custom Leaflet
+ * Templated on the old PIREP map's FogOfWarLayer pattern: a custom Leaflet
  * pane between tiles and markers, sized to the map's container, redrawn on
  * move/zoom/resize. Per § 7.5 of the design doc, the rendering is
  * intentionally pixelated at low zoom — it shows the actual 0.25° grid

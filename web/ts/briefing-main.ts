@@ -4,10 +4,8 @@ import { fetchCurrentUser } from './adapters/auth-adapter';
 import { briefingStore, effectiveThemeId, type BriefingState } from './store/briefing-store';
 import * as api from './adapters/api-adapter';
 import * as ui from './managers/briefing-ui';
-import { fetchPirepsByFlight } from './adapters/pirep-adapter';
 import { fetchDebriefReport } from './adapters/debrief-adapter';
 import { mountDebriefSection, type DebriefSectionHandle } from './components/debrief-section';
-import { renderPirepList } from './managers/pirep-ui';
 import { initDonateNudge } from './managers/donate-nudge-ui';
 import { renderAdvisories, renderAltitudeTablePopup, setLiveAdvisoryCatalog, type AltitudeOverrideConfig, type AltTimeToggleConfig, type ProfileSelectorConfig } from './managers/advisories-ui';
 import { overlayAltitudeStatuses } from './helpers/altitude-diff';
@@ -525,24 +523,6 @@ function updateForecastOverlay(
 }
 
 
-async function loadFlightPireps(flightId: string): Promise<void> {
-  const wrapper = document.getElementById('pireps-wrapper');
-  const section = document.getElementById('pireps-section');
-  if (!wrapper || !section) return;
-
-  try {
-    const resp = await fetchPirepsByFlight(flightId);
-    if (resp.items.length > 0) {
-      wrapper.style.display = '';
-      renderPirepList(section, resp.items);
-    } else {
-      wrapper.style.display = 'none';
-    }
-  } catch {
-    // Permission denied or error — hide section silently
-    wrapper.style.display = 'none';
-  }
-}
 
 async function init(): Promise<void> {
   await initI18n();
@@ -3388,11 +3368,6 @@ async function init(): Promise<void> {
     // Deep-link (#308): now that routeAnalyses is loaded, honor any
     // ?point/model/view/preset/advisory params from an MCP or shared link.
     applyDeepLink();
-
-    // Load PIREPs for this flight (fire-and-forget, non-blocking)
-    if (s.flight) {
-      loadFlightPireps(s.flight.id);
-    }
 
     // Mark this briefing seen (clears the cross-surface badge). Only for the
     // owner viewing an actual pack; guarded to fire once per (flight, pack).

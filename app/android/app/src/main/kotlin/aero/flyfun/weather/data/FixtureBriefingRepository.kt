@@ -388,20 +388,6 @@ open class FixtureBriefingRepository(
         savedDebrief = null
     }
 
-    override suspend fun submitPirep(req: SubmitPirepRequest): PirepResponse =
-        PirepResponse(
-            id = 1,
-            clientUuid = req.clientUuid,
-            flightId = req.flightId,
-            observedAt = req.observedAt,
-            latitude = req.latitude,
-            longitude = req.longitude,
-            isOwn = true,
-        )
-
-    override suspend fun listPireps(flightId: String): PirepListResponse =
-        PirepListResponse()
-
     override suspend fun resolveSharedFlight(code: String): FlightResponse =
         flights.first()
 

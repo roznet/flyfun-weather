@@ -59,11 +59,6 @@ final class AppState {
     /// Sends GPS fixes to the server (#761), one per signed-in repository, so
     /// a fix taken on any screen shares the flight's unsent queue.
     @ObservationIgnored private(set) var livePositions: LivePositionService?
-    /// Offline PIREP queue, scoped to the signed-in user (reassigned in
-    /// `setupClient`). Same cross-user leak as the briefing cache: a single
-    /// unscoped `pending_pireps.json` would sync user A's queued reports under
-    /// user B. `private(set) var` so only sign-in reshapes it.
-    private(set) var pirepOfflineStore = PirepOfflineStore()
     let userPreferences = UserPreferencesStore()
     /// First-run setup calls (#900); nil when signed out, like `repository`.
     @ObservationIgnored private(set) var setupRepository: (any SetupRepository)?
@@ -417,12 +412,10 @@ final class AppState {
         try await apiClient.requestVoid("/auth/account", method: "DELETE")
         Self.logger.info("Account deleted")
         // Account is gone — leave nothing on disk. Wipe this user's scoped cache
-        // and offline PIREP queue (otherwise the 30-day janitor would be the only
-        // thing to remove them).
+        // (otherwise the 30-day janitor would be the only thing to remove it).
         if let caching = cachingRepository {
             await caching.cache.clearAll()
         }
-        await pirepOfflineStore.clear()
         logout()
     }
 
@@ -725,17 +718,6 @@ final class AppState {
         }
     }
 
-    // MARK: - Offline sync
-
-    func syncPendingPireps() async {
-        guard let repository else { return }
-        await pirepOfflineStore.load()
-        let synced = await pirepOfflineStore.sync(using: repository)
-        if synced > 0 {
-            Self.logger.info("Synced \(synced) offline PIREPs")
-        }
-    }
-
     /// Offer the first-run setup wizard when this account hasn't done it on
     /// any client (#900). Read once per sign-in from `/auth/me`; offline or
     /// on any error the wizard simply isn't shown this time. A late answer
@@ -833,25 +815,13 @@ final class AppState {
         repository as? any TripRepository
     }
 
-    /// Per-user offline PIREP queue: `<Documents>/PendingPireps/<scope>/pending_pireps.json`.
-    private static func scopedPirepURL(scope: String) -> URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("PendingPireps", isDirectory: true)
-            .appendingPathComponent(scope, isDirectory: true)
-            .appendingPathComponent("pending_pireps.json")
-    }
-
-    /// Discard a pre-scoping `Documents/pending_pireps.json`. We deliberately do
-    /// NOT migrate it into a scope: the legacy file carries no owner, so on a
-    /// shared device (previous user logged out before the update, a different user
-    /// signs in first) moving it would submit user A's queued reports — with their
-    /// position and notes — under user B. A wrongly-attributed PIREP is worse than
-    /// losing a rare unsynced draft (the queue is only non-empty if a report was
-    /// submitted offline and never synced before the update), so drop it.
-    private static func discardLegacyPireps() {
-        let legacy = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("pending_pireps.json")
-        try? FileManager.default.removeItem(at: legacy)
+    /// The PIREP feature is gone (#1024): drop whatever its offline queue left
+    /// on disk, the per-user `PendingPireps/` tree and the older unscoped
+    /// `pending_pireps.json`. Nothing reads them any more.
+    private static func discardPirepQueues() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        try? FileManager.default.removeItem(at: docs.appendingPathComponent("PendingPireps", isDirectory: true))
+        try? FileManager.default.removeItem(at: docs.appendingPathComponent("pending_pireps.json"))
     }
 
     private func applyToken(_ token: String?) {
@@ -868,15 +838,14 @@ final class AppState {
         apiClient = client
         let online = OnlineBriefingRepository(client: client)
         // Scope the on-disk caches to the signed-in user so no user ever reads
-        // another's flight list / briefings / queued PIREPs (see cacheScope).
+        // another's flight list / briefings (see cacheScope).
         let scope = Self.cacheScope(forToken: tokenStore.token ?? "")
         let base = BriefingCacheStore.defaultBase()
         BriefingCacheStore.migrateLegacyLayout(base: base)
         let cache = BriefingCacheStore(cacheDir: BriefingCacheStore.scopedCacheDir(base: base, scope: scope))
         repository = CachingBriefingRepository(client: client, online: online, cache: cache)
         setupRepository = OnlineSetupRepository(client: client)
-        Self.discardLegacyPireps()
-        pirepOfflineStore = PirepOfflineStore(fileURL: Self.scopedPirepURL(scope: scope))
+        Self.discardPirepQueues()
         Task { await userPreferences.refresh(using: client) }
         Task { await helpCatalog.refresh(using: client) }
         Task { await whatsNew.syncIfNeeded(using: client) }

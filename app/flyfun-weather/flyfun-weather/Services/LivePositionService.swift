@@ -77,7 +77,7 @@ nonisolated enum LivePositionRules {
 /// Every source feeds it: Start Flight tracking (with each live poll and on
 /// return to the foreground), the landing auto-stop (with `landed`), and any
 /// one-shot fix during the flight's live window once Start was pressed for it
-/// (the PIREP form, the map's locate button, the fix taken when the flight is
+/// (the map's locate button, the fix taken when the flight is
 /// opened; before Start they are not sent, #812: the server reads the first
 /// ground fix at the departure as Start). Owner only (the
 /// server refuses anyone else). A post that fails for want of data (or a
