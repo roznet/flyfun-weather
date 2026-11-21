@@ -169,9 +169,15 @@ export function mountDebriefSection(
     run(async () => {
       state.debrief = await saveDebrief(flightId, { decision, reasons, note, form: 'questions' });
       state.draftNote = null;
-      // The report reads the decision (a cancelled flight asks nothing).
-      state.report = await fetchDebriefReport(flightId);
       onChanged?.(state.debrief);
+      // The report reads the decision (a cancelled flight asks nothing). The
+      // decision is stored by now: a failed refetch keeps the old report
+      // rather than reporting the save as failed.
+      try {
+        state.report = await fetchDebriefReport(flightId);
+      } catch (e) {
+        console.warn('Debrief report refetch failed', e);
+      }
     });
 
   const answer = (item: DebriefAnswerRequest) => run(async () => {
@@ -189,7 +195,8 @@ export function mountDebriefSection(
     if (el.dataset.decision) {
       const d = el.dataset.decision as 'flown' | 'cancelled';
       if (d === sectionDecision(state)) return;
-      void saveDecision(d, [], state.debrief?.note ?? null);
+      // A note typed but not yet saved goes with the new decision.
+      void saveDecision(d, [], noteValue() ?? state.debrief?.note ?? null);
     } else if (el.dataset.question && el.dataset.answer) {
       const qid = el.dataset.question;
       const q = state.report?.questions.find((x) => x.id === qid);

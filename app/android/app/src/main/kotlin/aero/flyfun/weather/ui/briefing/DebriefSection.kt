@@ -51,6 +51,8 @@ fun DebriefSection(viewModel: BriefingViewModel, modifier: Modifier = Modifier) 
     val pending by viewModel.debriefPendingAvoided.collectAsState()
     val current = report ?: return
     val decision = DebriefSectionRules.decision(debrief, current)
+    // The note as typed, held here so a decision or reason tap sends it too.
+    var note by rememberSaveable(debrief?.note) { mutableStateOf(debrief?.note.orEmpty()) }
 
     Card(
         modifier = modifier.fillMaxWidth().testTag("debriefSection"),
@@ -73,14 +75,14 @@ fun DebriefSection(viewModel: BriefingViewModel, modifier: Modifier = Modifier) 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = decision == DebriefSectionRules.Decision.FLOWN,
-                    onClick = { viewModel.chooseDebriefDecision(DebriefSectionRules.Decision.FLOWN) },
+                    onClick = { viewModel.chooseDebriefDecision(DebriefSectionRules.Decision.FLOWN, note) },
                     enabled = !busy,
                     label = { Text("I flew it") },
                     modifier = Modifier.testTag("debriefFlown"),
                 )
                 FilterChip(
                     selected = decision == DebriefSectionRules.Decision.CANCELLED,
-                    onClick = { viewModel.chooseDebriefDecision(DebriefSectionRules.Decision.CANCELLED) },
+                    onClick = { viewModel.chooseDebriefDecision(DebriefSectionRules.Decision.CANCELLED, note) },
                     enabled = !busy,
                     label = { Text("I cancelled") },
                     modifier = Modifier.testTag("debriefCancelled"),
@@ -98,7 +100,7 @@ fun DebriefSection(viewModel: BriefingViewModel, modifier: Modifier = Modifier) 
                     current.questions.forEach { q ->
                         DebriefQuestionBlock(q, pending, busy, viewModel)
                     }
-                    DebriefNote(debrief, busy, viewModel)
+                    DebriefNote(note, { note = it }, busy, viewModel)
                 }
                 DebriefSectionRules.Decision.CANCELLED -> {
                     Text("What made you cancel?", style = MaterialTheme.typography.bodyMedium)
@@ -110,14 +112,14 @@ fun DebriefSection(viewModel: BriefingViewModel, modifier: Modifier = Modifier) 
                         DebriefSectionRules.CANCEL_REASONS.forEach { (id, label) ->
                             FilterChip(
                                 selected = id in chosen,
-                                onClick = { viewModel.toggleDebriefCancelReason(id) },
+                                onClick = { viewModel.toggleDebriefCancelReason(id, note) },
                                 enabled = !busy,
                                 label = { Text(label) },
                                 modifier = Modifier.testTag("debriefReason-$id"),
                             )
                         }
                     }
-                    DebriefNote(debrief, busy, viewModel)
+                    DebriefNote(note, { note = it }, busy, viewModel)
                 }
                 null -> Unit
             }
@@ -175,13 +177,12 @@ private fun DebriefQuestionBlock(
 }
 
 @Composable
-private fun DebriefNote(debrief: DebriefResponse?, busy: Boolean, viewModel: BriefingViewModel) {
-    var note by rememberSaveable(debrief?.note) { mutableStateOf(debrief?.note.orEmpty()) }
+private fun DebriefNote(note: String, onNoteChange: (String) -> Unit, busy: Boolean, viewModel: BriefingViewModel) {
     val tooLong = note.length > DebriefSectionRules.NOTE_MAX_LENGTH
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         OutlinedTextField(
             value = note,
-            onValueChange = { note = it },
+            onValueChange = onNoteChange,
             label = { Text("Anything else? (optional)") },
             isError = tooLong,
             minLines = 2,

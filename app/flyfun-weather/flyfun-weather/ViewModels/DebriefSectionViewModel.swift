@@ -128,12 +128,19 @@ final class DebriefSectionViewModel {
                                          note: noteTooLong ? debrief?.note : trimmedNote, form: "questions")
             let saved = try await repository.upsertDebrief(flightId: flightId, request: request)
             debrief = saved
-            // The report reads the decision: a cancelled flight asks nothing.
-            report = try await repository.debriefReport(flightId: flightId)
             onSaved?(saved)
         } catch {
             errorMessage = "Could not save. Check your connection and try again."
             Self.logger.error("Debrief save failed: \(error)")
+            return
+        }
+        // The report reads the decision: a cancelled flight asks nothing. The
+        // decision is stored by now, so a failed refetch keeps the old report
+        // instead of showing the save as failed.
+        do {
+            report = try await repository.debriefReport(flightId: flightId)
+        } catch {
+            Self.logger.error("Debrief report refetch failed: \(error)")
         }
     }
 

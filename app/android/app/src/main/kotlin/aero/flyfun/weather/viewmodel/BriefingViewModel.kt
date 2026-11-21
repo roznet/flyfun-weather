@@ -772,13 +772,19 @@ class BriefingViewModel(
                 DebriefRequest(decision = decision.wire, reasons = reasons, note = note?.trim()?.takeIf { it.isNotEmpty() }),
             )
             _debrief.value = saved
-            // The report reads the decision: a cancelled flight asks nothing.
-            _debriefReport.value = repository.debriefReport(flightId)
+            // The report reads the decision: a cancelled flight asks nothing. The decision is
+            // stored by now, so a failed refetch keeps the old report rather than showing the
+            // save as failed.
+            runSuspendCatching { repository.debriefReport(flightId) }.getOrNull()?.let { _debriefReport.value = it }
         }
 
-    fun chooseDebriefDecision(decision: DebriefSectionRules.Decision) {
+    /** The typed note when it fits, else the stored one (a decision tap never drops a draft). */
+    private fun noteToSend(draft: String?): String? =
+        draft?.takeIf { it.isNotBlank() && it.length <= DebriefSectionRules.NOTE_MAX_LENGTH } ?: _debrief.value?.note
+
+    fun chooseDebriefDecision(decision: DebriefSectionRules.Decision, draftNote: String? = null) {
         if (DebriefSectionRules.decision(_debrief.value, _debriefReport.value) == decision) return
-        saveDebriefDecision(decision, emptyList(), _debrief.value?.note)
+        saveDebriefDecision(decision, emptyList(), noteToSend(draftNote))
     }
 
     fun answerDebriefQuestion(question: DebriefQuestion, option: String) =
@@ -793,9 +799,9 @@ class BriefingViewModel(
         }
     }
 
-    fun toggleDebriefCancelReason(tag: String) {
+    fun toggleDebriefCancelReason(tag: String, draftNote: String? = null) {
         val current = _debrief.value?.takeIf { it.decision == "cancelled" }?.reasons.orEmpty()
-        saveDebriefDecision(DebriefSectionRules.Decision.CANCELLED, DebriefSectionRules.toggledReasons(current, tag), _debrief.value?.note)
+        saveDebriefDecision(DebriefSectionRules.Decision.CANCELLED, DebriefSectionRules.toggledReasons(current, tag), noteToSend(draftNote))
     }
 
     fun saveDebriefNote(note: String) {

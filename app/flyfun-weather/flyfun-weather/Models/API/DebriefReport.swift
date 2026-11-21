@@ -79,3 +79,68 @@ nonisolated struct DebriefAnswersRequest: Encodable, Sendable, Equatable {
         var note: String? = nil
     }
 }
+
+// MARK: - Lenient decoding
+//
+// Every drawn field defaults (Android's `DebriefReport` does the same), so a
+// field the server omits or renames costs that field, not the whole section.
+// In extensions so the memberwise initialisers stay available to tests.
+
+extension DebriefReport {
+    nonisolated init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        flightId = try c.decodeIfPresent(String.self, forKey: .flightId)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
+        message = try c.decodeIfPresent(String.self, forKey: .message)
+        cancelled = try c.decodeIfPresent(Bool.self, forKey: .cancelled)
+        summary = try c.decodeIfPresent(Summary.self, forKey: .summary)
+        questions = try c.decodeIfPresent([Question].self, forKey: .questions) ?? []
+    }
+}
+
+extension DebriefReport.Summary {
+    nonisolated init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        headline = try c.decodeIfPresent(String.self, forKey: .headline) ?? ""
+        differsFromForecast = try c.decodeIfPresent(Bool.self, forKey: .differsFromForecast)
+        lines = try c.decodeIfPresent([DebriefReport.Line].self, forKey: .lines) ?? []
+    }
+}
+
+extension DebriefReport.Line {
+    nonisolated init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? ""
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+    }
+}
+
+extension DebriefReport.Question {
+    nonisolated init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? ""
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        options = try c.decodeIfPresent([DebriefReport.Option].self, forKey: .options) ?? []
+        avoidable = try c.decodeIfPresent(Bool.self, forKey: .avoidable) ?? false
+        answer = try c.decodeIfPresent(DebriefReport.Answer.self, forKey: .answer)
+    }
+}
+
+extension DebriefReport.Option {
+    nonisolated init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+    }
+}
+
+extension DebriefReport.Answer {
+    nonisolated init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        answer = try c.decode(String.self, forKey: .answer)
+        avoided = try c.decodeIfPresent(Bool.self, forKey: .avoided) ?? false
+        note = try c.decodeIfPresent(String.self, forKey: .note)
+        answeredAt = try c.decodeIfPresent(String.self, forKey: .answeredAt)
+    }
+}
