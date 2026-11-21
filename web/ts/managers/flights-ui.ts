@@ -1,7 +1,7 @@
 /** DOM management for the Flights list page. */
 
 import type { BriefingStatusInfo, CoveragePending, DebriefStats, FlightResponse, TripResponse, TripSummary } from '../store/types';
-import { fetchRouteAdvisories, type RefreshEntry } from '../adapters/api-adapter';
+import type { RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
 import { MAX_QUERY_LEN, matchesQuery, parseQuery } from '../helpers/flight-search';
 import { buildTripSelection, type TripSelectionContext } from '../helpers/trip-selection';
@@ -10,10 +10,8 @@ import { tripHeading } from '../helpers/trip-heading';
 import { actionGroupStart, selectionBarButtons } from '../helpers/selection-bar-order';
 import { assessmentClass, outlookClass } from '../helpers/assessment-badges';
 import { t, getDateLocale } from '../i18n/i18n';
-import { renderDebriefForm } from '../components/debrief-form';
 import { renderDebriefPill, renderDebriefSummary } from '../components/debrief-summary';
 import { renderDebriefStats } from '../components/debrief-stats';
-import { flaggedTagsFromAdvisories } from '../components/debrief-taxonomy';
 import { showRoutePopup } from '../components/route-interpret';
 
 /** Status badge for a flight's latest briefing: long-range outlook badge when
@@ -488,11 +486,17 @@ function renderFlightCard(
     debriefPill = ` ${renderDebriefPill(f.debrief)}`;
   }
 
-  // Recent-section CTA: clicking expands an inline form below the row.
-  // Only rendered for owner-past-undebriefed flights in the recent section.
-  const isRecent = f.section === 'recent';
-  const debriefAction = isRecent && !isShared && !f.debrief
-    ? `<button class="btn btn-secondary btn-debrief" data-id="${escapeHtml(f.id)}">${t('debrief.openCta')}</button>`
+  // #1024: the debrief lives on the briefing page's Debrief section. The CTA
+  // shows while the report has unanswered questions, or on a recent flight
+  // with no debrief yet (the server's "please debrief" nudge).
+  const questionsOpen = f.questions_open ?? 0;
+  const needsDebrief = !isShared && past && (questionsOpen > 0 || (f.section === 'recent' && !f.debrief));
+  const debriefAction = needsDebrief
+    ? `<a class="btn btn-secondary btn-debrief" data-testid="flight-debrief-link"`
+      + ` href="/briefing.html?flight=${encodeURIComponent(f.id)}#debrief">${t('debrief.openCta')}`
+      + `${questionsOpen > 0 ? ` · ${escapeHtml(questionsOpen === 1
+        ? t('debriefSection.questionsOpenOne')
+        : t('debriefSection.questionsOpenMany', { n: questionsOpen }))}` : ''}</a>`
     : '';
 
   return `
@@ -516,7 +520,6 @@ function renderFlightCard(
             ${debriefAction}
             ${ownerOnlyActions}
           </div>
-          <div class="debrief-host" data-flight-id="${escapeHtml(f.id)}"></div>
         </div>
         ${lb ? advisorySummaryHtml(lb) : ''}
       </div>
@@ -842,50 +845,6 @@ export function renderFlightList(
     });
     // Don't let the card intercept the click
     box.addEventListener('click', (e) => e.stopPropagation());
-  });
-
-  // Wire debrief CTAs (Recent section).
-  container.querySelectorAll('.btn-debrief').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const id = (btn as HTMLElement).dataset.id!;
-      const flight = flights.find(f => f.id === id);
-      if (!flight) return;
-      const card = (btn as HTMLElement).closest('.flight-card');
-      const host = card?.querySelector('.debrief-host') as HTMLElement | null;
-      if (!host) return;
-      // Toggle: if already open, close it.
-      if (host.dataset.open === '1') {
-        host.dataset.open = '';
-        host.innerHTML = '';
-        return;
-      }
-      host.dataset.open = '1';
-      host.innerHTML = `<div class="debrief-loading">${escapeHtml(t('debrief.loading'))}</div>`;
-      // Lazy-fetch advisories for the latest pack so the form knows which
-      // categories to surface as outcome questions. Keyed on the pack timestamp
-      // alone, not has_advisories: that flag now comes from the denormalized
-      // summary (#870), which pre-#276 packs lack even though their manifest
-      // is on disk. Empty list if the pack has no advisories or the call fails.
-      const lb = flight.latest_briefing;
-      let flaggedCategories: ReturnType<typeof flaggedTagsFromAdvisories> = [];
-      if (lb && lb.fetch_timestamp) {
-        try {
-          const manifest = await fetchRouteAdvisories(id, lb.fetch_timestamp);
-          flaggedCategories = flaggedTagsFromAdvisories(manifest);
-        } catch {
-          flaggedCategories = [];
-        }
-      }
-      // Bail if user closed it while we were fetching.
-      if (host.dataset.open !== '1') return;
-      renderDebriefForm(host, {
-        existing: flight.debrief ?? null,
-        flaggedCategories,
-        onSaved: () => { host.dataset.open = ''; host.innerHTML = ''; onDebriefChanged?.(); },
-        onDeleted: () => { host.dataset.open = ''; host.innerHTML = ''; onDebriefChanged?.(); },
-        onCancelled: () => { host.dataset.open = ''; host.innerHTML = ''; },
-      });
-    });
   });
 
   // Subscribed flights aren't bulk-deletable — exclude them from "select all"/"select all past".
