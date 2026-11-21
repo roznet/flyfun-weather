@@ -90,8 +90,19 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     /// the older journeys keep asserting against untouched fixtures.
     private var allFlights: [FlightResponse] {
         if let showcase { return [showcase.flight] }
-        return (flightsFixture + FixtureTripData.legs + createdFlights)
+        return (flightsFixture.map(withMockDebrief) + FixtureTripData.legs + createdFlights)
             .filter { !deletedFlightIds.contains($0.id) }
+    }
+
+    /// `FLYFUN_MOCK_DEBRIEF=1`: `fixture-1` carries the server's report flags
+    /// (#1023) so the briefing opens its Debrief section.
+    private func withMockDebrief(_ flight: FlightResponse) -> FlightResponse {
+        guard Self.mockDebrief, isBriefed(flight.id) else { return flight }
+        var f = flight
+        f.debriefReady = true
+        f.questionsOpen = FixtureFiles.decode(DebriefReport.self, "debrief-report").questions.count - debriefAnswers.count
+        f.debrief = storedDebrief
+        return f
     }
 
     func flight(id: String) async throws -> FlightResponse {
@@ -193,7 +204,48 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func fetchPireps(flightId: String) async throws -> PirepListResponse { PirepListResponse(items: [], count: 0) }
     func fetchDebrief(flightId: String) async throws -> DebriefResponse { throw APIError.notFound }
     func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse {
-        throw FixtureError.notProvided("upsertDebrief")
+        guard Self.mockDebrief, isBriefed(flightId) else { throw FixtureError.notProvided("upsertDebrief") }
+        let saved = DebriefResponse(flightId: flightId, decision: request.decision, reasons: request.reasons,
+                                    outcomes: [:], note: request.note, form: request.form,
+                                    createdAt: "2099-07-01T12:00:00Z", updatedAt: "2099-07-01T12:00:00Z")
+        storedDebrief = saved
+        if request.decision == "cancelled" { debriefAnswers = [:] }
+        return saved
+    }
+
+    // MARK: Debrief report (#1024) — `FLYFUN_MOCK_DEBRIEF=1`
+
+    /// Serves `fixture-1` as a flown flight whose report is built
+    /// (`debrief_ready`), with the shared `debrief-report.json`. Off by default
+    /// so the other journeys see `fixture-1` exactly as before.
+    private static var mockDebrief: Bool { ProcessInfo.processInfo.environment["FLYFUN_MOCK_DEBRIEF"] == "1" }
+    private var debriefAnswers: [String: DebriefReport.Answer] = [:]
+    private var storedDebrief: DebriefResponse?
+
+    func debriefReport(flightId: String) async throws -> DebriefReport {
+        guard Self.mockDebrief, isBriefed(flightId) else { throw APIError.notFound }
+        let base = FixtureFiles.decode(DebriefReport.self, "debrief-report")
+        if storedDebrief?.decision == "cancelled" {
+            return DebriefReport(flightId: base.flightId, status: base.status, message: base.message,
+                                 cancelled: true, summary: base.summary, questions: [])
+        }
+        let questions = base.questions.map { q in
+            DebriefReport.Question(id: q.id, kind: q.kind, text: q.text, options: q.options,
+                                   avoidable: q.avoidable, answer: debriefAnswers[q.id])
+        }
+        return DebriefReport(flightId: base.flightId, status: base.status, message: base.message,
+                             cancelled: base.cancelled, summary: base.summary, questions: questions)
+    }
+
+    func saveDebriefAnswers(flightId: String, request: DebriefAnswersRequest) async throws -> DebriefReport {
+        guard Self.mockDebrief, isBriefed(flightId) else { throw APIError.notFound }
+        for item in request.answers {
+            debriefAnswers[item.questionId] = item.answer.map {
+                DebriefReport.Answer(answer: $0, avoided: item.avoided, note: item.note,
+                                     answeredAt: "2099-07-01T12:00:00Z")
+            }
+        }
+        return try await debriefReport(flightId: flightId)
     }
     func deleteDebrief(flightId: String) async throws {}
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws {}

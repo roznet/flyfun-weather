@@ -60,6 +60,10 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     /// means the call is not stubbed. Every request is recorded.
     var postLivePositionResults: [Result<LivePositionResult, Error>] = []
     private(set) var postedLivePositions: [LivePositionRequest] = []
+    /// Debrief section (#1024): the report served, and every save recorded.
+    var debriefReportResult: Result<DebriefReport, Error> = .failure(MockError.notStubbed("debriefReport"))
+    private(set) var savedDebriefAnswers: [DebriefAnswersRequest] = []
+    private(set) var upsertedDebriefs: [DebriefRequest] = []
 
     // --- Trips (#607). Stored here because a Swift extension can't declare
     // stored properties; the conformance itself is in the extension below.
@@ -382,7 +386,17 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     }
     func fetchPireps(flightId: String) async throws -> PirepListResponse { throw MockError.notStubbed("fetchPireps") }
     func fetchDebrief(flightId: String) async throws -> DebriefResponse { throw MockError.notStubbed("fetchDebrief") }
-    func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse { throw MockError.notStubbed("upsertDebrief") }
+    func upsertDebrief(flightId: String, request: DebriefRequest) async throws -> DebriefResponse {
+        upsertedDebriefs.append(request)
+        return DebriefResponse(flightId: flightId, decision: request.decision, reasons: request.reasons,
+                               outcomes: request.outcomes, note: request.note, form: request.form,
+                               createdAt: "2026-11-20T12:00:00Z", updatedAt: "2026-11-20T12:00:00Z")
+    }
+    func debriefReport(flightId: String) async throws -> DebriefReport { try debriefReportResult.get() }
+    func saveDebriefAnswers(flightId: String, request: DebriefAnswersRequest) async throws -> DebriefReport {
+        savedDebriefAnswers.append(request)
+        return try debriefReportResult.get()
+    }
     func deleteDebrief(flightId: String) async throws { throw MockError.notStubbed("deleteDebrief") }
     func submitDigestFeedback(_ request: DigestFeedbackRequest) async throws { throw MockError.notStubbed("submitDigestFeedback") }
     func submitHighlightFeedback(_ request: HighlightFeedbackRequest) async throws { throw MockError.notStubbed("submitHighlightFeedback") }
