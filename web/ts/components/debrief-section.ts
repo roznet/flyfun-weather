@@ -17,6 +17,7 @@
 import type { ConditionTagId, DebriefReport, DebriefResponse } from '../store/types';
 import { ALL_TAGS, TAG_LABELS } from './debrief-taxonomy';
 import {
+  fetchDebrief,
   fetchDebriefReport,
   saveDebrief,
   saveDebriefAnswers,
@@ -182,10 +183,16 @@ export function mountDebriefSection(
 
   const answer = (item: DebriefAnswerRequest) => run(async () => {
     state.report = await saveDebriefAnswers(flightId, [item]);
-    // The server stored the flight as flown with this answer.
-    // With no debrief row yet, `sectionDecision` reads flown from the answer.
-    if (state.debrief) state.debrief = { ...state.debrief, decision: 'flown', reasons: [], form: 'questions' };
     delete state.pendingAvoided[item.question_id];
+    // The server folds the answers into the stored debrief: the first answer
+    // stores the flight as flown, clearing the last one drops a derived
+    // debrief with no note. Follow what it stored rather than guess.
+    try {
+      state.debrief = await fetchDebrief(flightId);
+    } catch (e) {
+      console.warn('Debrief refetch failed', e);
+      if (state.debrief) state.debrief = { ...state.debrief, decision: 'flown', reasons: [], form: 'questions' };
+    }
     onChanged?.(state.debrief);
   });
 

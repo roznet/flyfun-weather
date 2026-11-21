@@ -15,14 +15,14 @@ vi.mock('../../ts/i18n/i18n', () => ({
   },
 }));
 vi.mock('../../ts/adapters/debrief-adapter', () => ({
-  fetchDebriefReport: vi.fn(), saveDebrief: vi.fn(), saveDebriefAnswers: vi.fn(),
+  fetchDebrief: vi.fn(), fetchDebriefReport: vi.fn(), saveDebrief: vi.fn(), saveDebriefAnswers: vi.fn(),
 }));
 
 import type { DebriefReport, DebriefResponse } from '../../ts/store/types';
 import {
   debriefSectionHtml, mountDebriefSection, sectionDecision, type DebriefSectionState,
 } from '../../ts/components/debrief-section';
-import { fetchDebriefReport, saveDebrief } from '../../ts/adapters/debrief-adapter';
+import { fetchDebrief, fetchDebriefReport, saveDebrief, saveDebriefAnswers } from '../../ts/adapters/debrief-adapter';
 
 const FIXTURE = resolve(__dirname, '../../../app/fixtures/api/debrief-report.json');
 const report = (): DebriefReport => JSON.parse(readFileSync(FIXTURE, 'utf8')) as DebriefReport;
@@ -137,5 +137,25 @@ describe('debrief section saves', () => {
     expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ decision: 'cancelled' }));
     expect(host.innerHTML).not.toContain('data-testid="debrief-error"');
     expect(host.innerHTML).toContain('data-testid="debrief-reason"');
+  });
+
+  it('clearing the last answer follows the server dropping the derived debrief', async () => {
+    // "I flew it" stored a derived debrief; the server drops it when the
+    // last answer is cleared, so the section goes back to the decision tap.
+    const r = report();
+    vi.mocked(saveDebriefAnswers).mockResolvedValue(r);
+    vi.mocked(fetchDebrief).mockResolvedValue(null);
+    const onChanged = vi.fn();
+    const answered = report();
+    answered.questions[0].answer = { answer: 'light', avoided: false, note: null } as never;
+    const { host, click } = stubHost('');
+    mountDebriefSection(host, 'f', { report: answered, debrief: debrief() }, onChanged);
+    click({ question: answered.questions[0].id, answer: 'light' });
+    await flush();
+    expect(vi.mocked(saveDebriefAnswers).mock.calls.at(-1)?.[1]).toEqual([
+      { question_id: answered.questions[0].id, answer: null, avoided: false },
+    ]);
+    expect(onChanged).toHaveBeenLastCalledWith(null);
+    expect(host.innerHTML).not.toContain('data-testid="debrief-question"');
   });
 });

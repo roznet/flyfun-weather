@@ -264,7 +264,9 @@ final class BriefingViewModel {
         await section.load()
         guard section.report != nil else { return }
         section.onSaved = { [weak self] saved in
-            if let saved { self?.setDebrief(saved) }
+            // The stored debrief, nil when the server dropped it (every
+            // answer cleared): the Advisory card follows it either way.
+            self?.setDebrief(saved)
             onSaved?(saved)
         }
         debriefSection = section

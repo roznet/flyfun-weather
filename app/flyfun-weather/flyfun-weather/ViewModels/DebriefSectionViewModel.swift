@@ -153,16 +153,26 @@ final class DebriefSectionViewModel {
             report = try await repository.saveDebriefAnswers(
                 flightId: flightId, request: DebriefAnswersRequest(answers: [item]))
             pendingAvoided[item.questionId] = nil
-            // The server stored the flight as flown with this answer.
+        } catch {
+            errorMessage = "Could not save. Check your connection and try again."
+            Self.logger.error("Debrief answer failed: \(error)")
+            return
+        }
+        // The server folds the answers into the stored debrief: the first
+        // answer stores the flight as flown, clearing the last one drops a
+        // derived debrief with no note. Follow what it stored rather than guess.
+        do {
+            debrief = try await repository.fetchDebrief(flightId: flightId)
+        } catch APIError.notFound {
+            debrief = nil
+        } catch {
+            Self.logger.error("Debrief refetch failed: \(error)")
             if let d = debrief, d.decision != "flown" {
                 debrief = DebriefResponse(flightId: d.flightId, decision: "flown", reasons: [], outcomes: d.outcomes,
                                           note: d.note, form: "questions", createdAt: d.createdAt,
                                           updatedAt: d.updatedAt)
             }
-            onSaved?(debrief)
-        } catch {
-            errorMessage = "Could not save. Check your connection and try again."
-            Self.logger.error("Debrief answer failed: \(error)")
         }
+        onSaved?(debrief)
     }
 }

@@ -17,7 +17,7 @@ object DebriefSectionRules {
     /**
      * Cancel reasons, in the server's taxonomy order with its labels (`debriefs/taxonomy.py`
      * `TAG_LABELS`). A hand copy, like the web's `debrief-taxonomy.ts`: Android does not read
-     * the help catalog's `debrief` key yet. Covered by the sync-ios-web audit.
+     * the help catalog's `debrief` key yet. Drift fails `tests/test_debrief_taxonomy_copies.py`.
      */
     val CANCEL_REASONS: List<Pair<String, String>> = listOf(
         "IMC" to "IMC",

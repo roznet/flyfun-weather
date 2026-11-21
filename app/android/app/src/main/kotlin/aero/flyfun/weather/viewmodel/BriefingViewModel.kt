@@ -3,6 +3,7 @@ package aero.flyfun.weather.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import aero.flyfun.weather.data.ApiClient
+import aero.flyfun.weather.data.ApiError
 import aero.flyfun.weather.data.BriefingRepository
 import aero.flyfun.weather.data.CachingBriefingRepository
 import aero.flyfun.weather.data.OnlineBriefingRepository
@@ -814,8 +815,19 @@ class BriefingViewModel(
     private fun sendDebriefAnswer(item: DebriefAnswerItem) = debriefSave { flightId ->
         _debriefReport.value = repository.saveDebriefAnswers(flightId, DebriefAnswersRequest(answers = listOf(item)))
         _debriefPendingAvoided.value = _debriefPendingAvoided.value - item.questionId
-        // The server stored the flight as flown with this answer.
-        _debrief.value = _debrief.value?.copy(decision = "flown", reasons = emptyList(), form = "questions")
+        // The server folds the answers into the stored debrief: the first answer stores the
+        // flight as flown, clearing the last one drops a derived debrief with no note. Follow
+        // what it stored rather than guess.
+        _debrief.value = try {
+            repository.debrief(flightId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ApiError) {
+            if (e == ApiError.NotFound) null
+            else _debrief.value?.copy(decision = "flown", reasons = emptyList(), form = "questions")
+        } catch (e: Throwable) {
+            _debrief.value?.copy(decision = "flown", reasons = emptyList(), form = "questions")
+        }
     }
 
     fun submitDigestFeedback(thumbsUp: Boolean, comment: String? = null) {

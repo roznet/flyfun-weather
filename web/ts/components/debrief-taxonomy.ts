@@ -6,7 +6,7 @@
  * app renders from (so iOS never hand-copies a third Swift copy). The web
  * bundle keeps this build-time mirror rather than fetching, so the labels
  * here must match `TAG_LABELS`/`TAG_DESCRIPTIONS`/`ADVISORY_TAG_MAP` in the
- * Python module. Drift is caught at code review + the sync-ios-web audit.
+ * Python module. `tests/test_debrief_taxonomy_copies.py` fails on tag or label drift.
  */
 
 import type { ConditionTagId, OutcomeValue } from '../store/types';
