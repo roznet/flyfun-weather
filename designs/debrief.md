@@ -33,7 +33,7 @@ flight_debriefs
 
 `form` (#1023): `questions` = the flown outcomes are derived from the debrief
 answers (`flight_debrief_answers`, see `debrief-report.md`); `legacy` = the old
-8-category form below, kept for older apps until #1024 ships. Existing rows
+8-category form, retired from every client by #1024 (old app versions may still send it). Existing rows
 were backfilled `legacy`.
 
 `monitoring` = flight created to watch weather, not intended to fly. It is
@@ -179,56 +179,27 @@ A debrief also keeps the flight's live history and per-tick snapshots forever
 
 ## UI layout
 
-Flights list page (`web/index.html`, entry `flights-main.ts`):
+Since #1024 the pilot answers on the **Debrief section** of the briefing, built from the
+server report (`debrief-report.md`, "Clients"). The old 8-category outcome form is gone from
+every client; new saves send `form: "questions"`. Old `legacy` rows still read back.
 
-```
-[ Future flights ]
-[ Recent — please debrief ]   ← per-row [Debrief →] button, accordion form
-[ Statistics (last 90 days) ]
-[ Past flights (collapsible) ]
-```
+Flights list page (`web/index.html`, entry `flights-main.ts`): recent rows and rows with
+`questions_open > 0` get a `Debrief` link to `/briefing.html?flight=ID#debrief`. No inline form.
 
-Flight detail page (`web/flight.html`): a single Debrief section appears
-under "Latest Assessment" for owner past flights only:
-- No debrief: `[ Add debrief ]` button
-- Has debrief: read-only summary card + `[ Edit debrief ]` button
+Flight detail page (`web/flight.html`): the Debrief card shows the stored summary and links to
+the same section, with the open question count.
 
-Both surfaces share the same `debrief-form.ts` component.
+iOS and Android: the briefing's Advisory tab keeps a `DebriefCard` (owner, past flight) with the
+stored decision and an Answer / Open button that switches to the Observed tab. The flights list
+shows the "Needs debrief" glyph from `FlightResponse.needsDebrief`: owner only, and
+`questions_open > 0` or a recent flight with no debrief. `/api/flights` still inlines `debrief`.
+No stats panel on the apps: `/api/debriefs/stats` is web-only.
 
-### iOS surfaces
+### Cancel reasons
 
-- `DebriefCard` sits on the Advisory tab of the briefing (owner-only), showing
-  the stored debrief or an entry prompt; tapping it presents `DebriefFormView`
-  as a sheet, driven by `DebriefViewModel`.
-- The flights list shows a "Needs debrief" nudge glyph on cards the server put
-  in `section == "recent"` (and only when `isEditable` — debrief is owner-only).
-  Tapping the row opens the briefing, where the card lives.
-- `/api/flights` inlines `debrief` so the list can draw the debriefed state and
-  the briefing can seed its card without a second call.
-- No stats panel on iOS — `/api/debriefs/stats` is web-only so far.
-
-### Form behaviour
-
-Hybrid entry on the cancel form:
-- Chips multi-select (`IMC, ICE, WIND, ...`)
-- Free-text note below
-- As pilot types, `matchTagsInText` scans the note and auto-activates
-  matching chips with a soft visual indicator. Pilot can deselect.
-
-Outcome form (flown):
-- Defaults every queried category to `consistent`.
-- Pilot only flips the ones that weren't.
-- The queried set = `flaggedCategories`, now derived from the briefing's
-  non-green advisories through `ADVISORY_TAG_MAP` —
-  `flaggedTagsFromAdvisories(manifest)` on web (flights list *and* flight
-  detail), `DebriefTaxonomy.flaggedTagIds(fromAdvisories:)` on iOS. It falls
-  back to `[]` when no manifest is loaded, which is why an un-briefed flight
-  shows an empty outcome list rather than all eight categories.
-
-The "default consistent" choice biases data toward "very inconsistent
-only" — accepted trade-off. Phase 2 (post-ETA prompt) will record an
-explicit `✓ All consistent` tap as a different signal than no debrief at
-all. Stats panel surfaces a copy caveat acknowledging the bias.
+Cancelled keeps the reason chips (`IMC, ICE, WIND, ...`), saved on each tap in taxonomy order,
+and the short note. The section no longer auto-ticks chips from the note (`matchTagsInText` in
+`debrief-taxonomy.ts` and `match_tags_in_text` in `taxonomy.py` remain, unused by the section).
 
 ## Files
 
@@ -242,10 +213,11 @@ all. Stats panel surfaces a copy caveat acknowledging the bias.
 - `src/weatherbrief/api/flights.py` — section + debrief on list response
 - `src/weatherbrief/tasks/retention.py` — T2 exemption
 - `alembic/versions/045_flight_debriefs.py` — table create
-- `web/ts/components/debrief-{form,summary,stats,taxonomy}.ts`
+- `web/ts/components/debrief-section.ts`, `debrief-{summary,stats,taxonomy}.ts`
 - `web/ts/adapters/debrief-adapter.ts`
 - `app/.../Models/API/DebriefTaxonomy.swift`, `DebriefResponse.swift` — iOS wire types + baseline
-- `app/.../ViewModels/DebriefViewModel.swift`, `Views/Briefing/DebriefFormView.swift` — iOS form + card
+- `app/.../ViewModels/DebriefSectionViewModel.swift`, `Views/Briefing/DebriefSectionView.swift` — iOS section + card
+- `app/android/.../ui/briefing/DebriefSection.kt`, `model/rules/DebriefSectionRules.kt` — Android section + card
 
 Debrief report, answers and the window-close push: `debrief-report.md`.
 
