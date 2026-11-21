@@ -9,12 +9,13 @@ enum class BriefingTab(val title: String) {
 
     companion object {
         /**
-         * Ordered tab list for the briefing screen.
-         * Observed sits next to Advisory while the flight is in its live window.
+         * Ordered tab list for the briefing screen, matching iOS `BriefingTab.tabs`:
+         * Observed is appended at the end while the flight is in its live window, so the
+         * other tabs keep their positions when it comes and goes.
          */
         fun tabs(showsObserved: Boolean): List<BriefingTab> =
             if (showsObserved) {
-                listOf(ADVISORY, OBSERVED, DISCUSSION, CROSS_SECTION, MAP)
+                listOf(ADVISORY, DISCUSSION, CROSS_SECTION, MAP, OBSERVED)
             } else {
                 listOf(ADVISORY, DISCUSSION, CROSS_SECTION, MAP)
             }

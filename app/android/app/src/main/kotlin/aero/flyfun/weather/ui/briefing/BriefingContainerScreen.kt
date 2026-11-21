@@ -19,20 +19,24 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Map
+import androidx.compose.material.icons.outlined.Sensors
+import androidx.compose.material.icons.outlined.SsidChart
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Notes
+import androidx.compose.material.icons.automirrored.outlined.Notes
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.SsidChart
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.ShowChart
-import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -416,7 +420,7 @@ fun BriefingContainerScreen(
                                 modifier = Modifier.testTag(briefingTabTestTag(tab)),
                                 icon = {
                                     Icon(
-                                        imageVector = tab.icon(),
+                                        imageVector = tab.icon(selected = tab == selectedTab),
                                         contentDescription = null,
                                         modifier = Modifier.size(18.dp),
                                     )
@@ -437,7 +441,7 @@ fun BriefingContainerScreen(
                             modifier = Modifier.testTag(briefingTabTestTag(tab)),
                             icon = {
                                 Icon(
-                                    imageVector = tab.icon(),
+                                    imageVector = tab.icon(selected = tab == selectedTab),
                                     contentDescription = tab.title,
                                 )
                             },
@@ -470,12 +474,21 @@ fun BriefingContainerScreen(
     }
 }
 
-private fun BriefingTab.icon(): ImageVector = when (this) {
-    BriefingTab.ADVISORY -> Icons.Default.Verified
-    BriefingTab.OBSERVED -> Icons.Default.Sensors
-    BriefingTab.DISCUSSION -> Icons.Default.Description
-    BriefingTab.CROSS_SECTION -> Icons.Default.ShowChart
-    BriefingTab.MAP -> Icons.Default.Map
+/**
+ * Closest Material match to the iOS tab's SF Symbol (`BriefingTab.systemImage`): filled when
+ * selected, outlined otherwise, as iOS fills its tab-bar symbols.
+ */
+private fun BriefingTab.icon(selected: Boolean): ImageVector = when (this) {
+    // exclamationmark.triangle
+    BriefingTab.ADVISORY -> if (selected) Icons.Filled.Warning else Icons.Outlined.Warning
+    // text.alignleft
+    BriefingTab.DISCUSSION -> if (selected) Icons.AutoMirrored.Filled.Notes else Icons.AutoMirrored.Outlined.Notes
+    // chart.xyaxis.line
+    BriefingTab.CROSS_SECTION -> if (selected) Icons.Filled.SsidChart else Icons.Outlined.SsidChart
+    // map
+    BriefingTab.MAP -> if (selected) Icons.Filled.Map else Icons.Outlined.Map
+    // dot.radiowaves.left.and.right
+    BriefingTab.OBSERVED -> if (selected) Icons.Filled.Sensors else Icons.Outlined.Sensors
 }
 
 // ============================================================================
