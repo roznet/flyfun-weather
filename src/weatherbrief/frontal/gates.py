@@ -51,7 +51,9 @@ class FrontGateConfig:
       quasi-stationary; it *rejects nothing*.
     * **geometry / sampling** — route step, merge distance, the ±window the θe
       jump is measured across, the off-track proximity radius, the approach
-      look-ahead, and whether the anomaly filter runs.
+      look-ahead, whether the anomaly filter runs, and ``max_gap_km``: the
+      longest run of failing contour points that :func:`extract_front_lines`
+      bridges before closing a map line (0 = no bridging, the old behaviour).
 
     All thresholds default to the values validated on the 2026-05-31 Channel
     cold front (the historical module constants). Construct presets with
@@ -76,6 +78,11 @@ class FrontGateConfig:
     proximity_km: float = 120.0        # off-track lateral/ahead search radius
     approach_dh: float | None = 2.0    # h look-ahead for closing/receding verdict
     use_anomaly_filter: bool = True
+    # Map overlay only (extract_front_lines): the longest run of failing TFP=0
+    # contour points bridged before a line is closed, in km. 0 = no bridging
+    # (a line ends at the first failing point). The route locator never joins
+    # points into lines, so it ignores this.
+    max_gap_km: float = 0.0
 
     # ------------------------------------------------------------------
     # Serialization
@@ -127,6 +134,10 @@ _PRESETS: dict[str, FrontGateConfig] = {
     "gradient-only": FrontGateConfig(
         name="gradient-only", delta_theta_e_min=0.0,
     ),
+    # Default gates, but the map overlay bridges failing stretches of up to
+    # 75 km before the length check, so a real front broken by terrain / θe
+    # noise is drawn as one line (#1028). Map-only; calibration candidate.
+    "default-gap75": FrontGateConfig(name="default-gap75", max_gap_km=75.0),
 }
 
 

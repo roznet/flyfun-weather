@@ -169,8 +169,9 @@ def extract_front_lines(
 
     Steps: (1) ``contourpy`` extracts the TFP=0 contours, (2) each vertex is
     mapped to lat/lon and gated by ``config``, (3) contiguous runs of surviving
-    vertices become polylines, (4) runs shorter than ``min_length_km`` are
-    dropped. ``background`` (a time-mean |∇θe| grid) enables the anomaly filter
+    vertices become polylines, bridging failing stretches up to
+    ``config.max_gap_km`` long (0 = none), (4) runs shorter than
+    ``min_length_km`` are dropped. ``background`` (a time-mean |∇θe| grid) enables the anomaly filter
     when ``config.use_anomaly_filter`` is set.
     """
     tfp = grids.tfp
@@ -191,21 +192,33 @@ def extract_front_lines(
     for line in gen.lines(0.0):
         # ``line`` is an (n, 2) array of (x=col, y=row) fractional indices.
         run: list[FrontVertex] = []
+        gap_km = 0.0  # distance covered by failing points since the last pass
+        prev: tuple[float, float] | None = None
         for col, row in line:
             lat = _index_to_coord(float(row), lat_axis)
             lon = _index_to_coord(float(col), lon_axis)
+            step_km = haversine_km(prev[0], prev[1], lat, lon) if prev else 0.0
+            prev = (lat, lon)
             vtx = _gate_vertex(
                 lat, lon, grids, lat_axis, lon_axis, config,
                 background, terrain_mask,
             )
             if vtx is not None:
                 run.append(vtx)
+                gap_km = 0.0
             elif run:
-                # Gap in the gated axis — close the current run.
+                # Failing point: never appended, so a bridged gap is a straight
+                # jump between the passing points either side of it.
+                if config.max_gap_km > 0:
+                    gap_km += step_km
+                    if gap_km <= config.max_gap_km:
+                        continue
+                # Gap in the gated axis (or too long to bridge): close the run.
                 polylines.extend(
                     _finish_run(run, config, min_length_km)
                 )
                 run = []
+                gap_km = 0.0
         polylines.extend(_finish_run(run, config, min_length_km))
 
     return polylines

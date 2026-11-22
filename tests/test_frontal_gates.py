@@ -91,6 +91,27 @@ class TestPresets:
         # preset registry entry itself is unchanged
         assert get_preset("strict").level_hPa == 850
 
+    def test_max_gap_defaults_to_zero_on_existing_presets(self):
+        for name in ("default", "strict", "sensitive", "gradient-only"):
+            assert get_preset(name).max_gap_km == 0.0
+
+    def test_default_gap75_preset(self):
+        cfg = get_preset("default-gap75")
+        assert cfg.name == "default-gap75"
+        assert cfg.max_gap_km == 75.0
+        # Otherwise the default gates.
+        assert cfg.with_overrides(name="default", max_gap_km=0.0) == get_preset("default")
+
+    def test_max_gap_roundtrips(self):
+        cfg = get_preset("default-gap75")
+        assert cfg.to_dict()["max_gap_km"] == 75.0
+        assert FrontGateConfig.from_dict(cfg.to_dict()) == cfg
+
+    def test_old_artifact_without_max_gap_loads(self):
+        data = FrontGateConfig().to_dict()
+        del data["max_gap_km"]
+        assert FrontGateConfig.from_dict(data).max_gap_km == 0.0
+
     def test_unknown_preset_raises_with_names(self):
         with pytest.raises(KeyError, match="unknown gate preset"):
             get_preset("nope")

@@ -102,7 +102,7 @@ detection algorithm serves the briefing pipeline, calibration, and the 2-D map:
 - **Gate recipe** (`gates.py`): the ~10 scattered threshold constants collapse
   into one frozen, serializable `FrontGateConfig` (carries the pressure level;
   gates are level-specific). Presets: `default / strict / sensitive /
-  gradient-only`. Stamped into every `route_fronts.json` for reproducibility.
+  gradient-only`, plus the map-only `default-gap75`. Stamped into every `route_fronts.json` for reproducibility.
 - **Candidate/decision split**: sample once → `generate_front_candidates`
   (all TFP zero-crossings, ungated) → `apply_gate_config` (`FrontDecision` with
   `accepted` / `rejected_by` / margins). N configs re-score one candidate set
@@ -112,6 +112,12 @@ Pipeline wiring lives in `tasks/fronts.py` (`run_fronts` + `run_fronts_from_pack
 gated by the experimental `auto_front_detection` preference (default off); the
 artifact is served at `GET .../packs/{ts}/route-fronts`. The 2-D extractor is
 served at `GET /api/hewson-map/fronts` and overlaid on the synoptic map.
+`extract_front_lines` closes a line at a failing TFP=0 contour point unless
+`max_gap_km > 0`, in which case it bridges failing stretches up to that length
+before the `min_length_km` check (so a front broken by terrain or θe noise is
+drawn as one line). Only the map preset `default-gap75` sets it (75 km, #1028):
+the route locator never joins points and ignores it, and `default` stays
+unbridged until the calibration review supports a change.
 
 **Two independent per-profile controls (#196, model B).** `auto_front_detection`
 is the *master*: it generates `route_fronts.json` and drives the map / cross-section
