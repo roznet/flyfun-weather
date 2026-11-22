@@ -1,0 +1,4 @@
+- The cross-section draws your climb and descent; icing and cloud are graded along that path. Pick a climb/descent preset per aircraft.
+- New Debrief on the Observed tab: after a flight, say how the weather compared with the forecast. The flight list reminds you when one is waiting.
+- Briefing tabs follow the iPhone order with new icons; Observed appears once there is something measured.
+- Pilot reports are replaced by the Debrief.
