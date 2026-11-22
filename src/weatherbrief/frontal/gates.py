@@ -79,8 +79,10 @@ class FrontGateConfig:
     approach_dh: float | None = 2.0    # h look-ahead for closing/receding verdict
     use_anomaly_filter: bool = True
     # Map overlay only (extract_front_lines): the longest run of failing TFP=0
-    # contour points bridged before a line is closed, in km. 0 = no bridging
-    # (a line ends at the first failing point). The route locator never joins
+    # contour points bridged before a line is closed, in km, summed along the
+    # contour up to the last failing point (the step back onto the next passing
+    # point isn't counted, so the drawn jump can be one contour step longer).
+    # 0 = no bridging (a line ends at the first failing point). The route locator never joins
     # points into lines, so it ignores this.
     max_gap_km: float = 0.0
 

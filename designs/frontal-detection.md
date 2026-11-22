@@ -113,8 +113,9 @@ gated by the experimental `auto_front_detection` preference (default off); the
 artifact is served at `GET .../packs/{ts}/route-fronts`. The 2-D extractor is
 served at `GET /api/hewson-map/fronts` and overlaid on the synoptic map.
 `extract_front_lines` closes a line at a failing TFP=0 contour point unless
-`max_gap_km > 0`, in which case it bridges failing stretches up to that length
-before the `min_length_km` check (so a front broken by terrain or θe noise is
+`max_gap_km > 0`, in which case it bridges failing stretches of about that length
+before the `min_length_km` check (the gap sums the contour steps up to the last
+failing point, so the drawn jump can be one contour step longer, ~28 km at 0.25°) (so a front broken by terrain or θe noise is
 drawn as one line). Only the map preset `default-gap75` sets it (75 km, #1028):
 the route locator never joins points and ignores it, and `default` stays
 unbridged until the calibration review supports a change.
