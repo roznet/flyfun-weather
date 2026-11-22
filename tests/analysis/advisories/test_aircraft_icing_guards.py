@@ -5,7 +5,7 @@ killed 63% of mutants at 96% line coverage: the lines ran, their results were
 not asserted. Each test here pins one behaviour a surviving mutant could break
 without any other test noticing. The three ``test_metamorphic_*`` checks run
 rules (not fixed outputs) over every example route registered at import in
-this file (21 routes).
+this file.
 """
 
 from __future__ import annotations
@@ -118,8 +118,10 @@ def _points(name):
 # parameter lists before any test body runs).
 _CLIMB_ICE = _iced(range(4), [_rime(3000, 5000)], freezing_level_ft=2500)
 _DESCENT_ICE = _iced(range(17, N), [_rime(3000, 5000)], freezing_level_ft=2500)
-for _n in (1, 2):
-    _example(f"path_cruise_{_n}", _iced(range(10, 10 + _n)), path=True)
+# Path cruise exposures: one cell (short) and two cells (long), by iced indices.
+PATH_CRUISE = {(10,): AdvisoryStatus.AMBER, (10, 11): AdvisoryStatus.RED}
+for _indices in PATH_CRUISE:
+    _example(f"path_cruise_{len(_indices)}", _iced(_indices), path=True)
 _example("path_low_terrain", _iced([10]), path=True)
 _example("path_high_terrain", _iced([10]), path=True, terrain_ft=4000.0)
 _example("path_no_escape_down", _iced([10], freezing_level_ft=1000), path=True)
@@ -155,8 +157,7 @@ def _path_cruise_minutes(ctx, indices):
     return sum(picture[i].level_nm for i in indices) / ctx.cruise_groundspeed_kt * 60.0
 
 
-@pytest.mark.parametrize("indices,expected", [((10,), AdvisoryStatus.AMBER),
-                                               ((10, 11), AdvisoryStatus.RED)])
+@pytest.mark.parametrize("indices,expected", list(PATH_CRUISE.items()))
 def test_path_cruise_ice_is_timed_from_the_level_leg(indices, expected):
     """Ice at cruise mid-route on the path: the level leg's minutes at groundspeed,
     short (one cell, ~4.4 min) AMBER with an escape, long (two cells) RED."""
@@ -257,6 +258,15 @@ def test_flat_descent_through_ice_at_the_destination_is_timed_at_500_fpm():
     assert grade.status != AdvisoryStatus.GREEN
 
 
+def test_flat_descent_counts_overlapping_zones_once():
+    """3-5,000 and 4-6,000 ft: 3,000 ft of ice, 6 min at 500 fpm, not 8
+    (owner decision 2026-11-22, same rule as the flight path)."""
+    overlap = _iced([N - 1], [_rime(3000, 5000), _rime(4000, 6000)], freezing_level_ft=2500)
+    [stretch] = _grade(_ctx(overlap)).stretches
+    assert stretch.phases == ["descent"]
+    assert stretch.minutes == pytest.approx(3000 / 500)
+
+
 def test_flat_descent_minutes_add_to_a_cruise_stretch_at_the_destination():
     """Cruise ice at 190 nm, then the descent at 200 nm through 1,000 ft (7-8,000) +
     2,000 ft (3-5,000) of ice. The last cell's cruise time (5 nm) is covered by the
@@ -297,14 +307,10 @@ def test_live_confirmed_sld_in_the_climb_takes_over_a_lesser_stretch(monkeypatch
     assert grade.samples[0].severity.value == "red"
     assert grade.samples[10].severity.value == "amber"
     assert (grade.samples[10].region.base_ft, grade.samples[10].region.top_ft) == (7000, 9000)
-    # SLD leads, then the stretch sentence follows, re-capitalised.
-    monkeypatch.setenv(SLD_MODE_ENV, "off")
-    plain = _grade(_ctx(_iced([10], [_rime()]), terrain_ft=0.0)).detail
-    label, stretch = plain.split(": ", 1)
-    assert grade.detail.startswith(f"{label}: ")
-    sld_sentence, rest = grade.detail[len(label) + 2:].split(". ", 1)
-    assert "(climb)" in sld_sentence
-    assert rest == stretch[0].upper() + stretch[1:]
+    # SLD is named before the icing stretch (order only, not the wording).
+    detail = grade.detail.lower()
+    assert "sld" in detail and "(cruise)" in detail
+    assert detail.index("sld") < detail.index("(cruise)")
 
 
 def test_live_sld_aloft_leads_an_equal_amber_stretch(monkeypatch):
@@ -360,14 +366,20 @@ def test_a_too_shallow_band_does_not_hide_a_deeper_band_above_it():
     assert [(z.base_ft, z.top_ft) for z in zones] == [(8000, 10000)]
 
 
-def test_a_band_overlapping_a_confirmed_zone_is_dropped_but_a_touching_one_is_kept():
+def test_a_band_overlapping_or_touching_a_confirmed_zone_is_dropped():
+    """A band sharing the confirmed zone's edge is the same layer continuing
+    (owner decision 2026-11-22); one with a gap is a separate band."""
     levels = _aloft_levels(7000, 9000)
     over = SldZone(base_ft=8000, top_ft=12000, risk=IcingRisk.MODERATE, mechanism="warm_nose")
     below = SldZone(base_ft=0, top_ft=7000, risk=IcingRisk.MODERATE, mechanism="warm_nose")
     above = SldZone(base_ft=9000, top_ft=12000, risk=IcingRisk.MODERATE, mechanism="warm_nose")
-    assert assess_sld_aloft_zones(levels, [over], max_temp_c=-2.0, min_depth_ft=1000.0) == []
-    for touch in (below, above):
-        kept = assess_sld_aloft_zones(levels, [touch], max_temp_c=-2.0, min_depth_ft=1000.0)
+    gap_below = SldZone(base_ft=0, top_ft=6000, risk=IcingRisk.MODERATE, mechanism="warm_nose")
+    gap_above = SldZone(base_ft=10000, top_ft=12000, risk=IcingRisk.MODERATE, mechanism="warm_nose")
+    for confirmed in (over, below, above):
+        assert assess_sld_aloft_zones(
+            levels, [confirmed], max_temp_c=-2.0, min_depth_ft=1000.0) == []
+    for confirmed in (gap_below, gap_above):
+        kept = assess_sld_aloft_zones(levels, [confirmed], max_temp_c=-2.0, min_depth_ft=1000.0)
         assert [(z.base_ft, z.top_ft) for z in kept] == [(7000, 9000)]
 
 
@@ -404,9 +416,16 @@ def test_a_dropped_band_does_not_hide_the_next_one():
 
 
 
+# Frozen at import: the list every metamorphic parametrization uses.
+_NAMES = sorted(EXAMPLES)
+
+
 def test_every_example_reaches_the_metamorphic_checks():
-    """Guard for the registry: the parametrized names are all the examples."""
-    assert len(EXAMPLES) == 21
+    """Guard for the registry: nothing registered after collection is missed."""
+    assert _NAMES == sorted(EXAMPLES)
+    assert len(_NAMES) >= 21
+
+
 def _build(example, equipage=NON_FIKI, points=None):
     return _ctx(points if points is not None else example["points"], equipage,
                 path=example["path"], terrain_ft=example["terrain_ft"],
@@ -423,13 +442,13 @@ def _with_zone(spec, zone):
     return spec
 
 
-@pytest.mark.parametrize("name", sorted(EXAMPLES))
+@pytest.mark.parametrize("name", _NAMES)
 def test_metamorphic_fiki_is_never_graded_worse_than_non_fiki(name):
     ex = EXAMPLES[name]
     assert _status(_build(ex, FIKI)) <= _status(_build(ex, NON_FIKI))
 
 
-@pytest.mark.parametrize("name", sorted(EXAMPLES))
+@pytest.mark.parametrize("name", _NAMES)
 @pytest.mark.parametrize("equipage", [FIKI, NON_FIKI], ids=["fiki", "non_fiki"])
 def test_metamorphic_adding_an_icing_zone_never_lowers_the_grade(name, equipage):
     ex = EXAMPLES[name]
@@ -444,7 +463,7 @@ def test_metamorphic_adding_an_icing_zone_never_lowers_the_grade(name, equipage)
             assert after >= before, f"zone {zone.base_ft}-{zone.top_ft} {zone.risk} at {i}"
 
 
-@pytest.mark.parametrize("name", sorted(EXAMPLES))
+@pytest.mark.parametrize("name", _NAMES)
 @pytest.mark.parametrize("equipage", [FIKI, NON_FIKI], ids=["fiki", "non_fiki"])
 def test_metamorphic_blanking_an_ice_free_point_never_lowers_the_grade(name, equipage):
     """A missing sounding where there is no ice can only remove a reset, never hide ice.

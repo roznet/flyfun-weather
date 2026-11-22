@@ -612,9 +612,12 @@ def _cell_minutes(points: list[IcingPoint], i: int, total_nm: float, speed_kt: f
 
 
 def _column_minutes(zones) -> float:
-    """Minutes to climb or descend through the iced part of a column."""
-    thickness = sum(max(z.top_ft - z.base_ft, 0.0) for z in zones)
-    return thickness / CLIMB_DESCENT_FPM
+    """Minutes to climb or descend through the iced part of a column.
+
+    Overlapping zones count once, as on the flight path (owner decision
+    2026-11-22): the aircraft crosses each foot of ice once.
+    """
+    return _iced_thickness(zones) / CLIMB_DESCENT_FPM
 
 
 def build_stretches(
