@@ -140,7 +140,7 @@ export interface HewsonFrontsParams {
   init: string;
   level: number;
   hour: number;
-  gate: string;            // preset: default | strict | sensitive | gradient-only
+  gate: string;            // preset: default | default-gap75 | strict | sensitive | gradient-only
   minLengthKm?: number;
 }
 

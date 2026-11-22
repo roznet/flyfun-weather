@@ -623,6 +623,20 @@ def test_get_fronts_happy_path(client, hewson_data_dir):
     assert min(lons) < 2.5 < max(lons) or abs(sum(lons) / len(lons) - 2.0) < 1.0
 
 
+def test_get_fronts_gap75_gate(client, hewson_data_dir):
+    _write_front_snapshot(hewson_data_dir / "hewson")
+    resp = client.get(
+        "/api/hewson-map/fronts",
+        params={"model": "ecmwf", "init": _INIT_ISO, "level": 850,
+                "hour": 6, "gate": "default-gap75"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["gate"] == "default-gap75"
+    assert body["gate_config"]["max_gap_km"] == 75.0
+    assert len(body["fronts"]) >= 1
+
+
 def test_get_fronts_unknown_gate_400(client, hewson_data_dir):
     _write_front_snapshot(hewson_data_dir / "hewson")
     resp = client.get(

@@ -16,7 +16,7 @@ export const SYNOPTIC_METRICS: readonly HewsonMetric[] = [
   'theta_e', 'gradient', 'neg_laplacian', 'tfp', 'advection', 'tendency',
 ];
 export const SYNOPTIC_FRONT_GATES: readonly string[] = [
-  'off', 'default', 'strict', 'sensitive', 'gradient-only',
+  'off', 'default', 'default-gap75', 'strict', 'sensitive', 'gradient-only',
 ];
 
 export const SYNOPTIC_URL_SCHEMA = {
