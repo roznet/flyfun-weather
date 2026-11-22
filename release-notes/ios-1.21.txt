@@ -1,0 +1,5 @@
+- The cross-section now draws your climb, cruise and descent instead of a flat cruise line.
+- New flights get an estimated duration from your aircraft and route when you don't enter one.
+- Aircraft profiles offer climb and descent presets, so you don't have to type the numbers.
+- After a flight, the Observed tab opens on a short debrief: flown or cancelled, a few questions about what you met, and a note. The Debrief nudge in the flight list takes you straight there.
+- Model badges now name the model: UKV and AROME instead of UKMO and MF.
