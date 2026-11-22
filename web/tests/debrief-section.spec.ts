@@ -65,13 +65,20 @@ async function mockApi(page: Page) {
     }
     return r.fulfill({ json: report });
   });
+  // The stored debrief: written by the decision taps, re-read after an answer
+  // (the server folds answers into it, so the section follows what it holds).
+  let stored: Record<string, unknown> | null = null;
   await page.route(`**/api/flights/${id}/debrief`, r => {
+    if (r.request().method() === 'GET') {
+      return stored ? r.fulfill({ json: stored }) : r.fulfill({ status: 404, json: { detail: 'No debrief' } });
+    }
     const body = r.request().postDataJSON();
     saved.debrief.push(body);
-    return r.fulfill({ json: {
+    stored = {
       flight_id: id, decision: body.decision, reasons: body.reasons ?? [], outcomes: {}, note: body.note ?? null,
       form: body.form ?? 'legacy', created_at: iso(new Date()), updated_at: iso(new Date()),
-    } });
+    };
+    return r.fulfill({ json: stored });
   });
   return { id, saved };
 }
