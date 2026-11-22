@@ -308,9 +308,10 @@ def assess_sld_aloft_zones(
 
     A band is a run of consecutive levels (in altitude order) that each carry
     rain water at or above the supercooled-rain floor (§24) at or below
-    ``max_temp_c``, spanning at least ``min_depth_ft``. A band that overlaps a
-    confirmed (surface-reaching) zone is dropped: that air is already graded
-    as confirmed SLD. Models without rain water (ECMWF, ICON-EU) yield none,
+    ``max_temp_c``, spanning at least ``min_depth_ft``. A band that overlaps or
+    touches a confirmed (surface-reaching) zone is dropped: that air is already
+    graded as confirmed SLD, and a band sharing its edge is the same layer
+    continuing, not a second one (owner decision 2026-11-22). Models without rain water (ECMWF, ICON-EU) yield none,
     which means "not detected", never "no SLD".
 
     Risk is MODERATE: the icing card grades these AMBER at most whatever the
@@ -342,7 +343,7 @@ def assess_sld_aloft_zones(
         top_ft = run[-1].altitude_ft
         if top_ft - base_ft < min_depth_ft:
             continue
-        if any(c.base_ft < top_ft and c.top_ft > base_ft for c in confirmed or []):
+        if any(c.base_ft <= top_ft and c.top_ft >= base_ft for c in confirmed or []):
             continue
         temps = [lv.temperature_c for lv in run]
         zones.append(SldZone(

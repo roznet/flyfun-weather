@@ -6518,6 +6518,8 @@ if it is". The aircraft wins over the profile (#777).
   no warm air intervenes; the descent joins any open stretch. The first and last cells
   are flown climbing/descending, so an iced cruise cell there counts only its excess
   over the column minutes (max, not sum: the same time is not counted twice).
+  Overlapping zones in the column count once (their union), as on the flight
+  path (owner decision 2026-11-22; before, flat mode summed them).
   A warm nose blocks the descent escape even without a freezing-rain flag (block code
   `warm_nose`, distinct from `freezing_rain`).
 - *Escape level clamped below the iced zone*, so a freezing level above an iced cruise
@@ -8160,7 +8162,9 @@ step, mostly showers just above the freezing level.
   crosses it; a wall in `icing_cell_cost`.
 - **Unconfirmed aloft** = `assess_sld_aloft_zones` (`analysis/sounding/sld.py`):
   consecutive levels with rain water ≥ 1e-6 kg/kg (§24) at or below
-  **-2 °C**, spanning at least **1,000 ft**, not overlapping a confirmed zone.
+  **-2 °C**, spanning at least **1,000 ft**, not overlapping or touching a
+  confirmed zone (a band sharing the confirmed zone's edge is the same layer
+  continuing: dropped, owner decision 2026-11-22).
   AMBER at most, whatever else the stretch has; priced like moderate icing in
   the solver (never a wall, never offered as icing-free). The sentence says
   surface reports cannot confirm it. Only models with rain water see it
