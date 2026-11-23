@@ -6014,6 +6014,9 @@ def _apply_icon_surface_to_sections(
                 if v is not None
             }
             inst.update(_icon_diag_surface_fields(diags[i] if i < len(diags) else None))
+            # On v1 this guard is always true (no VIS). An Open-Meteo value
+            # already on a fallback point survives because _write_surface_step
+            # fills empty fields only (test_icon_v1_never_overwrites_...).
             if derive_vis and "visibility_m" not in inst:
                 vis = derived_visibility_m(ModelSource.ICON.value, inst)
                 if vis is not None:

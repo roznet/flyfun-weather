@@ -40,6 +40,11 @@ def derived_visibility_m(model: str, fields: Mapping[str, Any]) -> float | None:
     snapshot dict). None when the model has no selected method or the
     method's inputs are missing: the row then stays without visibility and
     grades on ceiling alone, as before.
+
+    The briefing caller passes the step's instantaneous fields only (no
+    precipitation rates, no lowest-model-level cloud water): a method put in
+    :data:`DERIVED_VISIBILITY_METHOD` that needs those (e.g. ``icon_blend``)
+    would return None everywhere until the caller supplies them.
     """
     method = derived_visibility_method(model)
     if method is None:
