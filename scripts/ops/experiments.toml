@@ -57,9 +57,9 @@ host = "server"
 commands = [
   "docker exec {SERVER_CONTAINER} python -m weatherbrief.verify visibility-report --model icon --days 14 --no-night-split --promotion icon",
 ]
-keep = ["scored hours", "Promotion bar", "PASS", "FAIL", "NOT ENOUGH DATA", "^icon +native"]
-decide_by = "2026-11-23"
-decision = "Does a derived method pass the promotion bar? Read this BEFORE flipping WB_ICON_FEED=v1 (~24 Nov): ICON's own visibility stops after the flip."
+keep = ["scored hours", "Promotion bar", "PASS", "FAIL", "NOT ENOUGH DATA", "^icon +(native|rh_icon|icon_blend) "]
+decide_by = "2026-11-30"
+decision = "rh_icon went live in briefings on 2026-11-23 (meteorology-decisions §89). On the last native overlap (3 weeks), does it still pass, or does icon_blend now beat it? Then switch the mini to v1, wire snapshots (keep native apart), and turn this into a standing check against METARs."
 good = "Scored hours growing every day; at least one method PASS, or NOT ENOUGH DATA shrinking towards the 40 / 15 hour gate."
 thread = "Issue 979: visibility and fog"
 
