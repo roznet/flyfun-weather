@@ -119,9 +119,12 @@ def _points(name):
 _CLIMB_ICE = _iced(range(4), [_rime(3000, 5000)], freezing_level_ft=2500)
 _DESCENT_ICE = _iced(range(17, N), [_rime(3000, 5000)], freezing_level_ft=2500)
 # Path cruise exposures: one cell (short) and two cells (long), by iced indices.
-PATH_CRUISE = {(10,): AdvisoryStatus.AMBER, (10, 11): AdvisoryStatus.RED}
-for _indices in PATH_CRUISE:
-    _example(f"path_cruise_{len(_indices)}", _iced(_indices), path=True)
+PATH_CRUISE = {
+    "path_cruise_1": ((10,), AdvisoryStatus.AMBER),
+    "path_cruise_2": ((10, 11), AdvisoryStatus.RED),
+}
+for _name, (_indices, _) in PATH_CRUISE.items():
+    _example(_name, _iced(_indices), path=True)
 _example("path_low_terrain", _iced([10]), path=True)
 _example("path_high_terrain", _iced([10]), path=True, terrain_ft=4000.0)
 _example("path_no_escape_down", _iced([10], freezing_level_ft=1000), path=True)
@@ -157,11 +160,12 @@ def _path_cruise_minutes(ctx, indices):
     return sum(picture[i].level_nm for i in indices) / ctx.cruise_groundspeed_kt * 60.0
 
 
-@pytest.mark.parametrize("indices,expected", list(PATH_CRUISE.items()))
-def test_path_cruise_ice_is_timed_from_the_level_leg(indices, expected):
+@pytest.mark.parametrize("name", sorted(PATH_CRUISE))
+def test_path_cruise_ice_is_timed_from_the_level_leg(name):
     """Ice at cruise mid-route on the path: the level leg's minutes at groundspeed,
     short (one cell, ~4.4 min) AMBER with an escape, long (two cells) RED."""
-    points = _points(f"path_cruise_{len(indices)}")
+    indices, expected = PATH_CRUISE[name]
+    points = _points(name)
     ctx = _ctx(points, path=True)
     grade = _grade(ctx)
     [stretch] = grade.stretches
@@ -413,7 +417,6 @@ def test_a_dropped_band_does_not_hide_the_next_one():
 
 
 # --- metamorphic checks over every example above -------------------------------
-
 
 
 # Frozen at import: the list every metamorphic parametrization uses.

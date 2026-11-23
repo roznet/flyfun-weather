@@ -311,8 +311,9 @@ def assess_sld_aloft_zones(
     ``max_temp_c``, spanning at least ``min_depth_ft``. A band that overlaps or
     touches a confirmed (surface-reaching) zone is dropped: that air is already
     graded as confirmed SLD, and a band sharing its edge is the same layer
-    continuing, not a second one (owner decision 2026-11-22). Models without rain water (ECMWF, ICON-EU) yield none,
-    which means "not detected", never "no SLD".
+    continuing, not a second one (owner decision 2026-11-22). Models without
+    rain water (ECMWF, ICON-EU) yield none, which means "not detected", never
+    "no SLD".
 
     Risk is MODERATE: the icing card grades these AMBER at most whatever the
     risk says, and the cross-section layer shows them like the other zones.
