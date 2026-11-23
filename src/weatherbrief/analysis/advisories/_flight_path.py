@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from weatherbrief.analysis.advisories import RouteContext
-from weatherbrief.models import RouteAdvisoryResult, ShadowGrade
+from weatherbrief.models import CloudCoverage, RouteAdvisoryResult, ShadowGrade
 
 FLIGHT_PATH_SHADOW_RULE = "flight_path"
 
@@ -146,19 +146,22 @@ def path_is_live(ctx: RouteContext) -> bool:
     return ctx.flight_path_live and ctx.flight_path is not None
 
 
-def _cloud_overlaps(layers, lo_ft: float, hi_ft: float) -> bool:
-    """A BKN / OVC layer overlaps ``[lo_ft, hi_ft]`` (inclusive, as ``flown_band`` grading)."""
-    from weatherbrief.models import CloudCoverage
+_IMC_COVERAGES = (CloudCoverage.BKN, CloudCoverage.OVC)
 
+
+def _cloud_overlaps(layers, lo_ft: float, hi_ft: float, coverages=_IMC_COVERAGES) -> bool:
+    """A ``coverages`` layer overlaps ``[lo_ft, hi_ft]`` (inclusive, as ``flown_band`` grading)."""
     return any(
-        cl.coverage in (CloudCoverage.BKN, CloudCoverage.OVC)
+        cl.coverage in coverages
         and cl.base_ft <= hi_ft and cl.top_ft >= lo_ft
         for cl in layers
     )
 
 
-def cell_phases_in_cloud(ctx: RouteContext, idx: int, layers) -> set[str]:
-    """Which phases of ``analyses[idx]``'s cell fly in BKN / OVC ``layers`` (#1011).
+def cell_phases_in_cloud(
+    ctx: RouteContext, idx: int, layers, coverages=_IMC_COVERAGES,
+) -> set[str]:
+    """Which phases of ``analyses[idx]``'s cell fly in ``coverages`` (BKN / OVC) ``layers`` (#1011).
 
     Empty in flat mode. A cell the band grading flagged always names at least
     one phase: if no single part meets the cloud (it sits between parts), the
@@ -169,12 +172,14 @@ def cell_phases_in_cloud(ctx: RouteContext, idx: int, layers) -> set[str]:
         return set()
     found: set[str] = set()
     for part in cell.vertical:
-        if _cloud_overlaps(layers, part.base_ft, part.top_ft):
+        if _cloud_overlaps(layers, part.base_ft, part.top_ft, coverages):
             found.add(part.phase)
     has_level = cell.level_nm > 0 or not cell.vertical
-    if has_level and _cloud_overlaps(layers, cell.level_ft, cell.level_ft):
+    if has_level and _cloud_overlaps(layers, cell.level_ft, cell.level_ft, coverages):
         found.add("cruise")
-    if not found and _cloud_overlaps(layers, *(flown_band(ctx, idx) or (0, -1))):
+    if not found and _cloud_overlaps(
+        layers, *(flown_band(ctx, idx) or (0, -1)), coverages,
+    ):
         found = {p.phase for p in cell.vertical}
         if has_level:
             found.add("cruise")

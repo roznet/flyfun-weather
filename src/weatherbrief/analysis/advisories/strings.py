@@ -673,25 +673,25 @@ _STRINGS: dict[str, dict[str, str]] = {
     # Flight path live (#1011): the cells are graded on the band flown, so
     # the text names the phases with cloud instead of "at cruise".
     "vmc_cruise.path.ovc": {
-        "en": "OVC on the {phases} over {extent}",
+        "en": "OVC in {phases} over {extent}",
         "fr": "OVC en {phases} sur {extent}",
         "de": "OVC im {phases} über {extent}",
         "es": "OVC en {phases} sobre {extent}",
     },
     "vmc_cruise.path.imc": {
-        "en": "IMC on the {phases} over {extent}",
+        "en": "IMC in {phases} over {extent}",
         "fr": "IMC en {phases} sur {extent}",
         "de": "IMC im {phases} über {extent}",
         "es": "IMC en {phases} sobre {extent}",
     },
     "vmc_cruise.path.mostly_clear": {
-        "en": "Mostly clear, IMC on the {phases} over {extent}",
+        "en": "Mostly clear, IMC in {phases} over {extent}",
         "fr": "Majoritairement dégagé, IMC en {phases} sur {extent}",
         "de": "Überwiegend klar, IMC im {phases} über {extent}",
         "es": "Mayormente despejado, IMC en {phases} sobre {extent}",
     },
     "vmc_cruise.path.clear": {
-        "en": "Clear on the {phases}",
+        "en": "Clear in {phases}",
         "fr": "Dégagé en {phases}",
         "de": "Klar im {phases}",
         "es": "Despejado en {phases}",

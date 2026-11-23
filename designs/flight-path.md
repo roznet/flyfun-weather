@@ -120,8 +120,8 @@ overrides survive; the apps retry the open on the next type or speed change.
 - **VMC at cruise / cloud tops**: a cell is graded on its flown band
   (`flown_band`), not at cruise. Live VMC text (#1011) never says "at cruise":
   the headline names the phases whose cells fly in cloud
-  (`cell_phases_in_cloud`, `phase_list`: "IMC on the climb, cruise and descent
-  over ..."; clear = "Clear on the" + `path_phases`). The climb / descent
+  (`cell_phases_in_cloud`, `phase_list`: "IMC in climb, cruise and descent
+  over ...", "IMC in cruise over ..."; clear = "Clear in" + `path_phases`). The climb / descent
   minutes from `in_cloud_on_path` follow as "; this includes the climb in cloud
   from nm X to nm Y, about N min": those cells are already in the headline
   extent, so the sentence is a breakdown, never extra time to add. Under the

@@ -144,7 +144,8 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
                 phases_any |= cell_phases_in_cloud(ctx, idx, sounding.cloud_layers)
                 if worst_coverage == CloudCoverage.OVC:
                     phases_ovc |= cell_phases_in_cloud(
-                        ctx, idx, _only_ovc(sounding.cloud_layers),
+                        ctx, idx, sounding.cloud_layers,
+                        coverages=(CloudCoverage.OVC,),
                     )
 
             if worst_coverage == CloudCoverage.OVC:
