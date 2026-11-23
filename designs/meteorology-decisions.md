@@ -8485,3 +8485,52 @@ on more PIREP data before it changes grades.
   separately on the pilot's pack to find its share.
 - **The digest and the card must read the same zones.** Two pictures of the same
   icing on one briefing is a defect, not a nuance.
+
+---
+
+## 89. ICON visibility on the native-grid feed: `rh_icon`, briefing path first (#979 phase 3)
+
+**Date:** 2026-11-23 · **Issue:** #979 · **Builds on:** §78 (no VIS on v1), §80 (methods and promotion bar)
+
+### Context
+
+The briefing switches to DWD's native-grid feed (`WB_ICON_FEED=v1`) before the
+lat-lon files end on 2026-11-30. v1 has no VIS, so under §78 alone ICON would
+grade on ceiling only and read ceiling-free fog or haze as VFR. Owner, 23 Nov:
+ship the feed switch and the derived visibility together, so pilots never see
+a ceiling-only ICON; the method can change later if the experiment says so.
+
+### Choices
+
+- **`rh_icon`** (2 m RH curve fitted to ICON's own VIS, §80) fills
+  `visibility_m` on every ICON hour of a v1 briefing slot. Scores on
+  2026-11-09..23 (14 days, 361,902 scored hours, D0-D2 promotion bar vs DWD
+  VIS on the same hours): PASS. CSI at D0 / D1 / D2 / D3+, rh_icon vs native:
+  < 1.5 km 16/18/15/11 vs 16/16/13/9; < 5 km 24/25/22/18 vs 27/26/22/18;
+  fog 16/17/14/10 vs 15/15/12/8. FAR < 5 km 63 vs 64. Covers every hour (only
+  T2m/Td2m needed).
+- **Rejected for now:** `icon_blend` (min of sw99 and rh_icon) is a near tie,
+  ahead at D0-D1 on < 5 km, behind at D2+ and on FAR, and it needs
+  lowest-model-level cloud water the briefing path does not fetch. It is the
+  one that sees visibility lost to rain or snow in unsaturated air; rh_icon
+  does not, and November had few snow events to score that. Revisit with
+  winter data. `rap_blend` passes the bar only because the bar tests < 5 km
+  and < 1.5 km: it forecasts < 8 km almost everywhere (POD 93, FAR 82).
+- **One table, one method per model**
+  (`analysis/visibility/selection.py::DERIVED_VISIBILITY_METHOD`), applied
+  only when the slot reads the v1 feed: on legacy, DWD's VIS is used and
+  nothing is derived, so the two never mix in a slot. Open-Meteo fallback
+  points keep Open-Meteo's own visibility (GRIB fills empty fields only).
+- **Briefing path only.** The forecast-map / alternates snapshots (Mac mini)
+  stay on the legacy feed, with DWD's VIS, until it ends on 2026-11-30. They
+  are also what the experiment scores, and `native` reads the snapshot's
+  `visibility_m`: writing a derived value there would score it as "native".
+  Wiring snapshots needs that provenance kept apart first (follow-up, before
+  the mini switches).
+
+### To measure
+
+The experiment (`experiments.toml`, `icon-derived-visibility`) keeps scoring
+every method against METARs. After 2026-11-30 there is no native baseline:
+the check becomes rh_icon (and the others) against METARs, with ECMWF's
+native visibility as the outside reference.

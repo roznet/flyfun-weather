@@ -5978,9 +5978,18 @@ def _apply_icon_surface_to_sections(
     missing a value at one step resets its predecessor, so the next step reads
     unknown rather than a multi-step total divided by one window.
     """
+    from weatherbrief.analysis.visibility.selection import derived_visibility_m
     from weatherbrief.fetch.grib.decode import build_icon_surface_snapshot
-    from weatherbrief.fetch.grib.icon_eu_fetch import ICON_SURFACE_ACCUMULATED
+    from weatherbrief.fetch.grib.icon_eu_fetch import (
+        ICON_SURFACE_ACCUMULATED,
+        icon_native_feed,
+    )
 
+    # The v1 feed has no VIS (#974): the selected derived method stands in,
+    # for every hour of the slot (#979 phase 3, meteorology-decisions §89).
+    # On the legacy feed DWD's own VIS is used and nothing is derived, so the
+    # two never mix inside one slot.
+    derive_vis = icon_native_feed()
     n_points = len(route_points)
     prev_raw: list[dict[str, float] | None] = [None] * n_points
     prev_valid_utc: datetime | None = None
@@ -6005,6 +6014,10 @@ def _apply_icon_surface_to_sections(
                 if v is not None
             }
             inst.update(_icon_diag_surface_fields(diags[i] if i < len(diags) else None))
+            if derive_vis and "visibility_m" not in inst:
+                vis = derived_visibility_m(ModelSource.ICON.value, inst)
+                if vis is not None:
+                    inst["visibility_m"] = vis
             if fhour == 0:
                 # vmax_10m is the maximum since the previous output step, so
                 # step 0 has no gust (DWD publishes 0): leave it empty rather

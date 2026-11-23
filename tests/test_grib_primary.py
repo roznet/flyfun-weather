@@ -677,6 +677,46 @@ def test_icon_surface_drops_the_step_zero_gust():
     assert by_h[7].wind_gusts_10m_kt == pytest.approx(19.44, abs=0.01)
 
 
+def _icon_vis_run(monkeypatch, feed, raw_extra=None, om_vis=None):
+    """One ICON point, one step at 06Z; returns the 06Z hourly."""
+    from weatherbrief.fetch.grib import _apply_icon_surface_to_sections
+
+    if feed is None:
+        monkeypatch.delenv("WB_ICON_FEED", raising=False)
+    else:
+        monkeypatch.setenv("WB_ICON_FEED", feed)
+    pts = _points(1)
+    skel = build_skeleton(pts, ModelSource.ICON, start_date="2026-05-04", end_date="2026-05-04")
+    if om_vis is not None:
+        for h in skel[0].hourly:
+            h.visibility_m = om_vis
+    cs = RouteCrossSection(model=ModelSource.ICON, route_points=pts,
+                           fetched_at=DEP, point_forecasts=skel)
+    # Saturated 2 m air: rh_icon reads 400 m.
+    raw = {"t_2m": 278.15, "td_2m": 278.15, "u_10m": 1.0, "v_10m": 1.0,
+           "pmsl": 101300.0, "ps": 99000.0, **(raw_extra or {})}
+    _apply_icon_surface_to_sections([cs], [], pts, "20260504", 6, {0: [raw]}, {})
+    return {h.time.hour: h for h in skel[0].hourly}[6]
+
+
+def test_icon_v1_derives_visibility(monkeypatch):
+    """#979 phase 3: the v1 feed has no VIS, the selected method stands in."""
+    h = _icon_vis_run(monkeypatch, "v1")
+    assert h.visibility_m == pytest.approx(400.0)
+
+
+def test_icon_legacy_keeps_dwd_vis_and_derives_nothing(monkeypatch):
+    assert _icon_vis_run(monkeypatch, None, {"vis": 7000.0}).visibility_m == pytest.approx(7000.0)
+    # Legacy with VIS missing at a point: stays unknown, never mixed in.
+    assert _icon_vis_run(monkeypatch, None).visibility_m is None
+
+
+def test_icon_v1_never_overwrites_open_meteo_visibility(monkeypatch):
+    """The Open-Meteo fallback path keeps its own value (empty fields only)."""
+    h = _icon_vis_run(monkeypatch, "v1", om_vis=9000.0)
+    assert h.visibility_m == pytest.approx(9000.0)
+
+
 def test_icon_surface_decode_from_grib(tmp_path):
     pytest.importorskip("eccodes")
     from tests import grib_synth
