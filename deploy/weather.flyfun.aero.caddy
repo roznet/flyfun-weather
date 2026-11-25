@@ -20,6 +20,7 @@ weather.flyfun.aero {
             roll_size 50MiB
             roll_keep 10
             roll_keep_for 2160h
+            mode 0644
         }
         format filter {
             request>uri query {
