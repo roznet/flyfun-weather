@@ -16,7 +16,7 @@ weather.flyfun.aero {
     # Caddy redacts Authorization/Cookie headers by default; the OAuth
     # one-time `code`/`state` query params are dropped here too.
     log {
-        output file /var/log/caddy/weather.flyfun.aero.log {
+        output file /var/log/caddy/weather.flyfun.aero-access.log {
             roll_size 50MiB
             roll_keep 10
             roll_keep_for 2160h
