@@ -12,6 +12,23 @@ weather.flyfun.aero {
         -Server
     }
 
+    # Access log, for request timings (`duration`) and incident post-mortems.
+    # Caddy redacts Authorization/Cookie headers by default; the OAuth
+    # one-time `code`/`state` query params are dropped here too.
+    log {
+        output file /var/log/caddy/weather.flyfun.aero.log {
+            roll_size 50MiB
+            roll_keep 10
+            roll_keep_for 2160h
+        }
+        format filter {
+            request>uri query {
+                delete code
+                delete state
+            }
+        }
+    }
+
     # Apple Universal Links — associate app with this domain.
     # iOS fetches and caches this file per-install, so a path must be
     # deployed BEFORE the app build that handles it ships — otherwise the
