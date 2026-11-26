@@ -54,6 +54,10 @@ _HEAVY_FILES = (
 )
 _HEAVY_DIRS = ("skewt",)
 
+#: How long past its T2 day a flight whose facts record cannot be frozen
+#: keeps its packs (#1031) before T2 goes ahead anyway.
+T2_FACTS_GRACE_DAYS = 30
+
 
 @dataclass
 class RetentionConfig:
@@ -130,17 +134,19 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
     )
     rows = db.execute(stmt).all()
 
+    # The past-flights record (#1031) must hold a flight's tags before T2
+    # takes the packs they come from: a flight whose record cannot be frozen
+    # skips T2 this run (T1 still applies), in the pack loop and the live
+    # pass alike.
+    no_facts = _ensure_facts_before_t2(
+        db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now,
+    )
+
     # The live layer is per flight, not per pack: one pass per flight, before
     # the pack loop can delete the rows that lead to it.
     stats.bytes_freed += _live_retention(
         db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now, stats,
-    )
-
-    # The past-flights record (#1031) must hold a flight's tags before T2
-    # takes the packs they come from: a flight whose record cannot be written
-    # keeps its packs this run.
-    no_facts = _ensure_facts_before_t2(
-        db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now,
+        t2_blocked=no_facts,
     )
 
     for pack, departure_time, user_id, pinned in rows:
@@ -158,9 +164,9 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
         try:
             pack_dir = Path(pack.artifact_path) if pack.artifact_path else None
 
-            if pack.flight_id in no_facts:
-                continue
-            if _t2_due(age_days, inactive, pack.flight_id in debriefed_flight_ids, config):
+            t2 = (_t2_due(age_days, inactive, pack.flight_id in debriefed_flight_ids, config)
+                  and pack.flight_id not in no_facts)
+            if t2:
                 freed = _purge_full_pack(pack, pack_dir, config.dry_run)
                 stats.packs_t2 += 1
                 stats.bytes_freed += freed
@@ -200,18 +206,27 @@ def _t2_due(age_days: int, inactive: bool, debriefed: bool, config: RetentionCon
 def _ensure_facts_before_t2(db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now) -> set[str]:
     """Write (and freeze) the facts record of every flight with a pack T2 will
     delete this run, unless already frozen. Returns the flights whose record
-    could not be written: their packs are left for the next run. Dry runs
+    could not be frozen (the write raised, or its last pre-departure pack has
+    no readable manifest): they skip T2 this run and are retried, for up to
+    :data:`T2_FACTS_GRACE_DAYS` past their T2 day, after which T2 proceeds
+    with an error log so a corrupt pack cannot pin disk forever. Dry runs
     write nothing and block nothing."""
     from weatherbrief.db.models import FlightFactsRow
     from weatherbrief.storage.flight_facts import safe_update_flight_facts
 
     due: set[str] = set()
+    overdue: set[str] = set()
     for pack, departure_time, user_id, pinned in rows:
         if pinned or pack.id in pirep_pack_ids or departure_time is None:
             continue
         dep = departure_time if departure_time.tzinfo else departure_time.replace(tzinfo=timezone.utc)
-        if _t2_due((now - dep).days, user_id in inactive_user_ids, pack.flight_id in debriefed_flight_ids, config):
+        age_days = (now - dep).days
+        inactive = user_id in inactive_user_ids
+        if _t2_due(age_days, inactive, pack.flight_id in debriefed_flight_ids, config):
             due.add(pack.flight_id)
+            t2_days = config.t2_inactive_days if inactive else config.t2_active_days
+            if age_days >= t2_days + T2_FACTS_GRACE_DAYS:
+                overdue.add(pack.flight_id)
     if not due or config.dry_run:
         return set()
     frozen = set(db.execute(
@@ -221,8 +236,17 @@ def _ensure_facts_before_t2(db, rows, pirep_pack_ids, inactive_user_ids, debrief
     ).scalars().all())
     failed = set()
     for flight_id in sorted(due - frozen):
-        if not safe_update_flight_facts(db, flight_id, now=now, freeze=True):
-            failed.add(flight_id)
+        ok = safe_update_flight_facts(db, flight_id, now=now, freeze=True)
+        row = db.get(FlightFactsRow, flight_id) if ok else None
+        if row is not None and row.forecast_frozen_at is not None:
+            continue
+        reason = "write_failed" if not ok else "tags_unreadable"
+        if flight_id in overdue:
+            logger.error("FLIGHT_FACTS_T2_PROCEEDS flight=%s reason=%s: past the grace, packs go without tags",
+                         flight_id, reason)
+            continue
+        logger.warning("FLIGHT_FACTS_T2_BLOCKED flight=%s reason=%s: packs kept this run", flight_id, reason)
+        failed.add(flight_id)
     return failed
 
 
@@ -234,7 +258,8 @@ def kept_flight_ids(db: Session, debriefed_flight_ids: set[str] | None = None) -
     return set(debriefed_flight_ids if debriefed_flight_ids is not None else list_debriefed_flight_ids(db))
 
 
-def _live_retention(db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now, stats) -> int:
+def _live_retention(db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now, stats,
+                    t2_blocked: set[str] = frozenset()) -> int:
     """Apply the live-layer tiers once per flight. Returns bytes freed.
 
     - T1: ``live.json``, the highlight log and the frozen marker.
@@ -274,7 +299,7 @@ def _live_retention(db, rows, pirep_pack_ids, inactive_user_ids, debriefed_fligh
                 # Kept flights never get here, whatever makes them kept.
                 packs_go = _t2_due(
                     age_days, f["user_id"] in inactive_user_ids, flight_id in debriefed_flight_ids, config,
-                )
+                ) and flight_id not in t2_blocked
                 if age_days >= config.live_days or packs_go:
                     names += LIVE_FILES_KEPT
             freed += _purge_live_files(f["flight_dir"], names, config.dry_run)

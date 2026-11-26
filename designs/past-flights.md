@@ -40,11 +40,18 @@ backfill, or no advisories): clients show "hazards not recorded", never "none".
 - **Window close** (`tasks/debrief_close.close_flight`): full refresh with
   `freeze=True` after the report row is committed.
 - **Retention**: `_ensure_facts_before_t2` writes and freezes every flight
-  with a T2-due pack whose record is not frozen; a flight whose write fails
-  keeps its packs this run. Dry runs write nothing.
+  with a T2-due pack whose record is not frozen. A flight whose record
+  cannot be frozen (write raised, or its last pre-departure pack has no
+  readable manifest) skips T2 this run, in the pack loop and the live pass
+  (T1 still applies), logged `FLIGHT_FACTS_T2_BLOCKED`. After
+  `T2_FACTS_GRACE_DAYS` (30) past its T2 day it goes anyway, logged
+  `FLIGHT_FACTS_T2_PROCEEDS` at error level. Dry runs write nothing.
 - **Backfill**: `python -m weatherbrief.tasks.flight_facts_backfill
   [--dry-run]` in the container, wrapped by
   `scripts/ops/backfill_flight_facts.py` (ssh, or `--local`).
+
+A record is never frozen over an unreadable chosen pack (it is retried);
+no pack before departure freezes as "not recorded".
 
 A frozen record never changes its forecast tags again, even if a pack is
 re-read; route and outcome still refresh.

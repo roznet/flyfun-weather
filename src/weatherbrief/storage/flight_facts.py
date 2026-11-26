@@ -281,7 +281,11 @@ def update_flight_facts(
                 row.forecast_pack_ts = chosen[0]
                 row.tags_recorded = True
         ended = _utc(flight.departure_time) + timedelta(hours=flight.flight_duration_hours or 0.0)
-        if departed <= now and (freeze or now - ended > FREEZE_AFTER):
+        # Never freeze over an unreadable chosen pack: a later run (or the
+        # retention guard) retries it. No pack before departure freezes as
+        # "not recorded", since none can appear later.
+        readable = chosen is None or row.tags_recorded
+        if departed <= now and readable and (freeze or now - ended > FREEZE_AFTER):
             row.forecast_frozen_at = now
 
     row.updated_at = now
