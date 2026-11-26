@@ -274,17 +274,19 @@ def update_flight_facts(
     if row.forecast_frozen_at is None:
         departed = _departed_at(flight, packs, now, cancelled=row.decision == "cancelled")
         chosen = default_forecast_pack(packs, departed)
+        read_ok = False  # this run read the chosen pack (not an earlier one)
         if chosen is not None:
             manifest = load_manifest(chosen[1])
             if manifest is not None:
                 row.forecast_tags_json = json.dumps(forecast_tags_from_manifest(manifest), sort_keys=True)
                 row.forecast_pack_ts = chosen[0]
                 row.tags_recorded = True
+                read_ok = True
         ended = _utc(flight.departure_time) + timedelta(hours=flight.flight_duration_hours or 0.0)
         # Never freeze over an unreadable chosen pack: a later run (or the
         # retention guard) retries it. No pack before departure freezes as
         # "not recorded", since none can appear later.
-        readable = chosen is None or row.tags_recorded
+        readable = chosen is None or read_ok
         if departed <= now and readable and (freeze or now - ended > FREEZE_AFTER):
             row.forecast_frozen_at = now
 

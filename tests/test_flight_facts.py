@@ -269,6 +269,16 @@ class TestRetention:
         stats = run_retention(db, cfg)
         assert stats.packs_t2 == 1 and not d.exists()
 
+    def test_corrupt_final_pack_not_frozen_on_earlier_tags(self, db, tmp_path):
+        f = _flight(db, "r5", 5)
+        dep = f.departure_time.replace(tzinfo=timezone.utc)
+        _pack(db, tmp_path, f, dep - timedelta(hours=6), _manifest(convective="amber"))
+        update_flight_facts(db, "r5", now=dep - timedelta(hours=5))  # before departure: earlier tags
+        d = _pack(db, tmp_path, f, dep - timedelta(hours=2), _manifest(aircraft_icing="red"))
+        Path(d, "route_advisories.json").write_text("{not json")
+        row = update_flight_facts(db, "r5", now=NOW, freeze=True)
+        assert row.forecast_frozen_at is None
+
     def test_unreadable_manifest_is_not_frozen(self, db, tmp_path):
         f = _flight(db, "r4", 5)
         dep = f.departure_time.replace(tzinfo=timezone.utc)

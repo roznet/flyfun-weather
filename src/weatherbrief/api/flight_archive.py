@@ -19,7 +19,8 @@ Facets: per tag, the flights matching every filter except ``tags`` that carry
 that tag (in the current ``source``); per outcome, every filter except
 ``outcome`` (``hide`` still applies). So a chip's count is what you get by
 turning that chip on alone. ``not_recorded`` counts the flights in the
-current filter whose forecast tags were never recorded.
+current filter whose forecast tags were never recorded (forecast tags,
+whatever the ``source``). Dates are UTC departure dates.
 
 The query reads ``flight_facts`` (``storage/flight_facts.py``); a flight
 with no row yet (before the backfill) is listed with its codes and
