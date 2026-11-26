@@ -14,6 +14,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { stubEmptyArchive } from './archive-stub';
 
 const FUTURE = new Date(Date.now() + 5 * 86400_000).toISOString().slice(0, 10);
 const PAST = new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10);
@@ -51,6 +52,9 @@ async function stubPage(page: Page): Promise<void> {
   await page.route('**/api/refresh/active', route => route.fulfill({ json: [] }));
   await page.route('**/api/debriefs/stats', route => route.fulfill({ json: null }));
   await page.route('**/api/flights/*/packs/latest', route => route.fulfill({ status: 404, body: '' }));
+  // Default: no past rows. Tests that need some call stubArchive, which is
+  // registered later and so takes precedence (Playwright: last route wins).
+  await stubEmptyArchive(page);
 }
 
 /** Serve the flights list, applying `past_q` server-side the way the API does

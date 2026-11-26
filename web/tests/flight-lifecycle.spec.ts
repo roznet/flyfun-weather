@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { stubEmptyArchive } from './archive-stub';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -194,6 +195,7 @@ test('flight lifecycle: create → view → save settings → altitude overlay �
   // --- Mock flights list ---
   // Regex (not a glob) so it also matches the paginated `?past_limit=…` query
   // string the store now sends; bare `**/api/flights` would miss it.
+  await stubEmptyArchive(page);
   await page.route(/\/api\/flights(\?.*)?$/, route => {
     const url = route.request().url();
     const method = route.request().method();

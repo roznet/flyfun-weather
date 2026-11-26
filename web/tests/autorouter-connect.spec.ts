@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { stubEmptyArchive } from './archive-stub';
 
 // #625 — "Import from Autorouter" when the account isn't linked offers to link
 // it right there (and comes back), rather than sending the pilot to Settings.
@@ -10,6 +11,7 @@ async function mockFlightsPage(page: Page, opts: { linked: boolean }) {
   await page.route('**/api/user/profiles', route => route.fulfill({ json: [] }));
   await page.route('**/api/aircraft', route => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/active', route => route.fulfill({ json: [] }));
+  await stubEmptyArchive(page);
   await page.route(/\/api\/flights(\?.*)?$/, route => route.fulfill({ json: [] }));
   await page.route('**/api/user/preferences', route => {
     if (route.request().url().includes('/preferences/')) return route.fallthrough();

@@ -11,6 +11,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { stubEmptyArchive } from './archive-stub';
 
 const FUTURE = new Date(Date.now() + 5 * 86400_000).toISOString().slice(0, 10);
 
@@ -36,6 +37,7 @@ async function stubFlights(page: Page): Promise<void> {
   await page.route('**/api/refresh/active', route => route.fulfill({ json: [] }));
   await page.route('**/api/debriefs/stats', route => route.fulfill({ json: null }));
   await page.route('**/api/flights/*/packs/latest', route => route.fulfill({ status: 404, body: '' }));
+  await stubEmptyArchive(page);
   await page.route(/\/api\/flights(\?.*)?$/, route => route.fulfill({ json: flights }));
 }
 

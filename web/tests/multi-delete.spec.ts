@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { stubEmptyArchive } from './archive-stub';
 
 const FUTURE = new Date(Date.now() + 5 * 86400_000).toISOString().slice(0, 10);
 
@@ -33,6 +34,7 @@ test('multi-select + bulk-delete flow', async ({ page }) => {
   let listCall = 0;
   // Regex (not a glob) so it also matches the paginated `?past_limit=…` query
   // string the store now sends; bare `**/api/flights` would miss it.
+  await stubEmptyArchive(page);
   await page.route(/\/api\/flights(\?.*)?$/, async route => {
     if (route.request().method() === 'GET') {
       listCall++;
@@ -96,6 +98,7 @@ test('clear-selection hides bar without deleting', async ({ page }) => {
   await page.route('**/api/aircraft', route => route.fulfill({ json: [] }));
   await page.route('**/api/refresh/active', route => route.fulfill({ json: [] }));
   await page.route('**/api/flights/*/packs/latest', route => route.fulfill({ status: 404, body: '' }));
+  await stubEmptyArchive(page);
   await page.route(/\/api\/flights(\?.*)?$/, route => route.fulfill({ json: flights }));
 
   await page.goto('http://localhost:8000/');
