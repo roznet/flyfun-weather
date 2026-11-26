@@ -239,7 +239,7 @@ class TestRetention:
         assert json.loads(db.get(FlightFactsRow, "r1").forecast_tags_json) == {"ICE": "red"}
 
     def test_failed_facts_write_keeps_packs(self, db, tmp_path, monkeypatch):
-        f = _flight(db, "r2", 200)
+        f = _flight(db, "r2", 100)  # the test user is inactive: T2 at 90 days
         dep = f.departure_time.replace(tzinfo=timezone.utc)
         d = _pack(db, tmp_path, f, dep - timedelta(hours=3), _manifest(aircraft_icing="red"))
         db.commit()
@@ -248,6 +248,37 @@ class TestRetention:
         monkeypatch.setattr(ff, "update_flight_facts", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
         stats = run_retention(db, RetentionConfig())
         assert stats.packs_t2 == 0 and d.exists()
+
+    def test_unreadable_manifest_keeps_packs_until_grace(self, db, tmp_path, monkeypatch):
+        import weatherbrief.tasks.retention as retention
+
+        cfg = RetentionConfig()
+        f = _flight(db, "r3", cfg.t2_inactive_days + 1)  # the test user is inactive
+        dep = f.departure_time.replace(tzinfo=timezone.utc)
+        d = _pack(db, tmp_path, f, dep - timedelta(hours=3), _manifest(aircraft_icing="red"))
+        Path(d, "route_advisories.json").write_text("{not json")
+        db.commit()
+        stats = run_retention(db, cfg)
+        db.commit()
+        assert stats.packs_t2 == 0 and d.exists()
+        row = db.get(FlightFactsRow, "r3")
+        assert row.tags_recorded is False and row.forecast_frozen_at is None
+
+        # Past the grace, T2 goes ahead (a corrupt pack cannot pin disk forever).
+        monkeypatch.setattr(retention, "T2_FACTS_GRACE_DAYS", 1)
+        stats = run_retention(db, cfg)
+        assert stats.packs_t2 == 1 and not d.exists()
+
+    def test_unreadable_manifest_is_not_frozen(self, db, tmp_path):
+        f = _flight(db, "r4", 5)
+        dep = f.departure_time.replace(tzinfo=timezone.utc)
+        d = _pack(db, tmp_path, f, dep - timedelta(hours=3), _manifest(aircraft_icing="red"))
+        Path(d, "route_advisories.json").write_text("{not json")
+        row = update_flight_facts(db, "r4", now=NOW, freeze=True)
+        assert row.forecast_frozen_at is None
+        Path(d, "route_advisories.json").write_text(json.dumps(_manifest(aircraft_icing="red")))
+        row = update_flight_facts(db, "r4", now=NOW, freeze=True)
+        assert row.tags_recorded is True and row.forecast_frozen_at is not None
 
 
 # --- Archive API --------------------------------------------------------------------
@@ -374,6 +405,7 @@ class TestArchiveApi:
 
     def test_unknown_tag_is_422(self, client, archive):
         assert client.get("/api/flights/archive", params={"tags": "XYZ"}).status_code == 422
+        assert client.get("/api/flights/archive", params={"from": "2026-05-02", "to": "2026-05-01"}).status_code == 422
 
     def test_flights_list_unchanged(self, client, archive):
         assert client.get("/api/flights").status_code == 200
