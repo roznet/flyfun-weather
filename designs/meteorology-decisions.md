@@ -8531,7 +8531,10 @@ a ceiling-only ICON; the method can change later if the experiment says so.
   VIS is missing), so map and briefing agree on ICON. Each such row records
   the method in `airport_forecast_snapshots.visibility_method` (migration
   122; NULL = the model's own). The experiment scores `native` only on NULL
-  rows, so a derived value is never scored as DWD's. The mini stays on the
+  rows, so a derived value is never scored as DWD's. The standard
+  verification scores (`tasks/scoring.py`: flight category and visibility
+  error vs METAR) deliberately do include the derived value on v1 rows, since
+  that is what pilots see. The mini stays on the
   legacy feed until 2026-11-30; the droplet's in-process alternates search
   was already on v1 since the briefing switch and had no ICON visibility
   until this. Snapshots carry the lowest-level inputs, so `icon_blend` would

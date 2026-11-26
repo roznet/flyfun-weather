@@ -34,7 +34,7 @@ def derived_visibility_method(model: str) -> str | None:
     return DERIVED_VISIBILITY_METHOD.get(model)
 
 
-def derived_visibility_m(model: str, fields: Mapping[str, Any] | Any) -> float | None:
+def derived_visibility_m(model: str, fields: Mapping[str, Any] | object) -> float | None:
     """Derived visibility (m, rounded) for one hour of *model*, or None.
 
     *fields* is any mapping or object with :class:`VisibilityInputs` names

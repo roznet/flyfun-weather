@@ -241,6 +241,9 @@ def _score_model_vs_metar(
 
     # Flight category — model uses same derivation as advisory pipeline;
     # observation uses the METAR-reported category (ground truth).
+    # On ICON's v1 feed hourly.visibility_m is the derived rh_icon value
+    # (snapshot visibility_method set, #974): scored on purpose, as it is
+    # what pilots see. Only the visibility experiment's ``native`` skips it.
     model_cat = classify_flight_category(model_ceiling, visibility_m=hourly.visibility_m)
 
     # Wind advisory — same function + thresholds
