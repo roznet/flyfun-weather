@@ -94,9 +94,9 @@ def _ctx(
 
 def _run(ctx: RouteContext, aggregation=AdvisoryAggregation.MAJORITY) -> dict[str, RouteAdvisoryResult]:
     results = evaluate_all(ctx, enabled_ids=AIRPORT_IDS, aggregation=aggregation)
-    # IFR Feasibility RED on an airport alone publishes no route coverage — a
-    # pre-existing ``flagged_has_coverage`` finding unrelated to the airport text.
-    violations = [v for v in check_advisories(results) if v.rule != "flagged_has_coverage"]
+    # No filter: an IFR Feasibility RED on an airport alone publishes no route
+    # coverage, and the invariant exempts it by its printed clause (#828).
+    violations = check_advisories(results)
     assert not violations, violations
     return {r.advisory_id: r for r in results}
 

@@ -36,8 +36,10 @@ from weatherbrief.analysis.route_geometry import route_extent
 from weatherbrief.models.advisories import (
     AdvisoryAggregation,
     AdvisoryStatus,
+    AirportClause,
     ModelAdvisoryResult,
 )
+from weatherbrief.models.airport_conditions import FlightCategory
 
 _ADVISORY_DIR = pathlib.Path(
     "src/weatherbrief/analysis/advisories"
@@ -423,6 +425,46 @@ class TestFlaggedImpliesCoverage:
             affected_points=0, total_points=8, total_nm=300.0,
         )
         assert [v.rule for v in invariants.check_model_result("test", measured)] == [
+            "flagged_has_coverage",
+        ]
+
+    def test_an_airport_only_flag_is_not_flagged(self):
+        """An airport is not a span of route (#828).
+
+        ``ifr_feasibility`` grades RED on an arrival below its minimum ceiling
+        with a clean route: the route population is published, no point of it is
+        affected, and the card names the airport through its printed clause.
+        """
+        airport_only = ModelAdvisoryResult(
+            model="gfs", status=AdvisoryStatus.RED,
+            detail="Arr ZZZZ LIFR (ceiling 200ft < 500ft min)",
+            affected_points=0, total_points=10, total_nm=200.0,
+            airport_clauses=[
+                AirportClause(end="dep", category=FlightCategory.VFR),
+                AirportClause(
+                    end="arr", category=FlightCategory.LIFR, printed=True,
+                    head="Arr ZZZZ ", suffix=" (ceiling 200ft < 500ft min)",
+                ),
+            ],
+        )
+        assert not invariants.check_model_result("ifr_feasibility", airport_only)
+
+    def test_an_unprinted_airport_clause_does_not_exempt_a_route_flag(self):
+        """The boundary of the airport exemption, so it can't quietly widen.
+
+        Airport evaluators record a clause for every airport, printed or not
+        (the consensus counts them all). A GREEN airport behind a flag with no
+        route extent leaves nothing to explain the flag: still a violation.
+        """
+        route_flag = ModelAdvisoryResult(
+            model="gfs", status=AdvisoryStatus.AMBER, detail="test",
+            affected_points=0, total_points=8, total_nm=300.0,
+            airport_clauses=[
+                AirportClause(end="dep", category=FlightCategory.VFR),
+                AirportClause(end="arr", category=FlightCategory.IFR),
+            ],
+        )
+        assert [v.rule for v in invariants.check_model_result("test", route_flag)] == [
             "flagged_has_coverage",
         ]
 
