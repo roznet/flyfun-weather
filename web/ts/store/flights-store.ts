@@ -232,7 +232,10 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
     // Guard against rapid double-clicks: until the in-flight page lands,
     // the offset wouldn't advance, so concurrent calls would all request the
     // same page and waste round-trips.
-    if (get().loadingMore) return;
+    // While a filter query is in flight the page offset is about to be
+    // reset; paging now would also drop that query as stale and leave the
+    // section stuck busy (`pastFiltering`).
+    if (get().loadingMore || get().pastFiltering) return;
     const seq = ++pastLoadSeq;
     const current = get().pastRows;
     set({ loadingMore: true });

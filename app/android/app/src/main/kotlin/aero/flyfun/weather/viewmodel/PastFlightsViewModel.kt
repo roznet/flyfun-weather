@@ -93,6 +93,7 @@ class PastFlightsViewModel(
                 _rows.value = _rows.value + resp.rows.filterNot { it.id in seen }
                 _total.value = resp.total
                 _facets.value = resp.facets
+                _error.value = null
             } catch (e: Exception) {
                 if (token != loadToken) return@launch
                 _error.value = e.message ?: "Couldn't load past flights"

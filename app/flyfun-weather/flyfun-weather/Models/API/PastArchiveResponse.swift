@@ -24,6 +24,24 @@ nonisolated struct PastArchiveFacets: Decodable, Sendable, Equatable {
     /// Matches per outcome for the current filter without the outcome chips.
     let outcomes: [String: Int]
     let notRecorded: Int
+
+    init(source: String, tags: [String: Int], outcomes: [String: Int], notRecorded: Int) {
+        self.source = source
+        self.tags = tags
+        self.outcomes = outcomes
+        self.notRecorded = notRecorded
+    }
+
+    /// Lenient like the Kotlin mirror: a missing key never fails the page.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        source = try c.decodeIfPresent(String.self, forKey: .source) ?? "forecast"
+        tags = try c.decodeIfPresent([String: Int].self, forKey: .tags) ?? [:]
+        outcomes = try c.decodeIfPresent([String: Int].self, forKey: .outcomes) ?? [:]
+        notRecorded = try c.decodeIfPresent(Int.self, forKey: .notRecorded) ?? 0
+    }
+
+    private enum CodingKeys: String, CodingKey { case source, tags, outcomes, notRecorded }
 }
 
 nonisolated struct PastArchiveTrip: Decodable, Sendable, Hashable {
@@ -51,7 +69,33 @@ nonisolated struct PastArchiveRow: Decodable, Sendable, Identifiable, Hashable {
     let differsFromForecast: Bool
     let distanceNm: Double?
 
-    var departureDate: Date? { ISO8601DateFormatter().date(from: departureTime) }
+    /// The server's `isoformat()` may carry microseconds: shared parser.
+    var departureDate: Date? { Date.parseISO8601(departureTime) }
+
+    /// Lenient like the Kotlin mirror: only `id` is required, so one row
+    /// missing a key never fails the whole page.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        departureTime = try c.decodeIfPresent(String.self, forKey: .departureTime) ?? ""
+        departure = try c.decodeIfPresent(String.self, forKey: .departure)
+        destination = try c.decodeIfPresent(String.self, forKey: .destination)
+        routeName = try c.decodeIfPresent(String.self, forKey: .routeName) ?? ""
+        trip = try c.decodeIfPresent(PastArchiveTrip.self, forKey: .trip)
+        forecastTags = try c.decodeIfPresent([String: String].self, forKey: .forecastTags) ?? [:]
+        forecastWorst = try c.decodeIfPresent(String.self, forKey: .forecastWorst)
+        tagsRecorded = try c.decodeIfPresent(Bool.self, forKey: .tagsRecorded) ?? false
+        reportedTags = try c.decodeIfPresent([String].self, forKey: .reportedTags) ?? []
+        decision = try c.decodeIfPresent(String.self, forKey: .decision)
+        debriefed = try c.decodeIfPresent(Bool.self, forKey: .debriefed) ?? false
+        differsFromForecast = try c.decodeIfPresent(Bool.self, forKey: .differsFromForecast) ?? false
+        distanceNm = try c.decodeIfPresent(Double.self, forKey: .distanceNm)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, departureTime, departure, destination, routeName, trip, forecastTags, forecastWorst
+        case tagsRecorded, reportedTags, decision, debriefed, differsFromForecast, distanceNm
+    }
 
     var title: String {
         let ends = [departure, destination].compactMap { $0 }
