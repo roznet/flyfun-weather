@@ -241,9 +241,9 @@ class TurbulenceEvaluator:
             # but it is "Severe CAT over 9nm", not over the light-and-above 146nm.
             significant_extent = summary.extent_of(lambda s: "significant" in s.tags)
             severe_extent = summary.extent_of(lambda s: "severe" in s.tags)
-            ext = format_extent(summary.extent)
-            ext_severe = format_extent(severe_extent)
-            ext_significant = format_extent(significant_extent)
+            ext = format_extent(summary.extent, locale=ctx.locale)
+            ext_severe = format_extent(severe_extent, locale=ctx.locale)
+            ext_significant = format_extent(significant_extent, locale=ctx.locale)
             # The extent of whichever tier the detail sentence ends up naming.
             # Published as the higher-threshold field so the sentence and the
             # structured pair always describe the SAME population — the severe

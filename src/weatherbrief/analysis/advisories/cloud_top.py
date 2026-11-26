@@ -191,7 +191,7 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
                 amber_pct=extent_pct_amber, red_pct=extent_pct_red,
                 min_nm=extent_min_nm,
             )
-            ext = format_extent(summary.extent)
+            ext = format_extent(summary.extent, locale=loc)
             detail = adv_t("cloud_top.above_ceiling", loc, extent=ext, top=f"{max_top:.0f}")
 
         # Coverage tolerance (#391): a clear verdict on a sounding subset that

@@ -210,11 +210,11 @@ def classify_enroute_precip(
     named_ext = hazard_ext
     if snow_pts:
         parts.append(adv_t(
-            "enroute_precip.snow", loc, extent=format_extent(snow_ext),
+            "enroute_precip.snow", loc, extent=format_extent(snow_ext, locale=loc),
         ))
     if sig_rain_pts:
         parts.append(adv_t(
-            "enroute_precip.rain", loc, extent=format_extent(sig_ext),
+            "enroute_precip.rain", loc, extent=format_extent(sig_ext, locale=loc),
         ))
 
     if grade_extent(
@@ -235,7 +235,7 @@ def classify_enroute_precip(
         if not parts and light_pts:
             named_ext = light_ext
             parts.append(adv_t(
-                "enroute_precip.light", loc, extent=format_extent(light_ext),
+                "enroute_precip.light", loc, extent=format_extent(light_ext, locale=loc),
             ))
         if not parts:
             parts.append(adv_t("enroute_precip.clear", loc))

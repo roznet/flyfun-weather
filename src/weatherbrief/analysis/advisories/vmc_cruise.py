@@ -195,16 +195,16 @@ def _evaluate(ctx: RouteContext, params: dict[str, float]) -> RouteAdvisoryResul
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.RED
                 ovc_only = True
-                detail = _text(ctx, "ovc", phases_ovc, extent=format_extent(ovc_extent))
+                detail = _text(ctx, "ovc", phases_ovc, extent=format_extent(ovc_extent, locale=loc))
             elif grade_extent(
                 summary.extent, amber_pct=extent_pct_amber,
                 min_nm=extent_min_nm,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.AMBER
-                detail = _text(ctx, "imc", phases_any, extent=format_extent(summary.extent))
+                detail = _text(ctx, "imc", phases_any, extent=format_extent(summary.extent, locale=loc))
             elif affected > 0:
                 status = AdvisoryStatus.GREEN
-                detail = _text(ctx, "mostly_clear", phases_any, extent=format_extent(summary.extent))
+                detail = _text(ctx, "mostly_clear", phases_any, extent=format_extent(summary.extent, locale=loc))
             else:
                 status = AdvisoryStatus.GREEN
                 detail = _text(ctx, "clear", path_phases(ctx) if live else set())

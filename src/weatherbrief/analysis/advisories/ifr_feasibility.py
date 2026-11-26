@@ -369,7 +369,8 @@ class IFRFeasibilityEvaluator:
                     extent=format_extent(
                         conv_grade.extent_mod
                         if conv_grade.affected_mod
-                        else conv_grade.extent
+                        else conv_grade.extent,
+                        locale=loc,
                     ),
                 )
 

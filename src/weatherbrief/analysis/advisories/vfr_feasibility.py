@@ -1128,26 +1128,26 @@ class VFRFeasibilityEvaluator:
                 if enroute_status == AdvisoryStatus.RED:
                     named_extent = imc_extent
                     enroute_detail = adv_t(
-                        "vfr.imc_over", loc, extent=format_extent(imc_extent),
+                        "vfr.imc_over", loc, extent=format_extent(imc_extent, locale=loc),
                     )
                 elif enroute_status == AdvisoryStatus.AMBER:
                     if marginal_count > 0 and imc_count > 0:
                         enroute_detail = adv_t(
                             "vfr.imc_marginal", loc,
-                            extent=format_extent(enroute_extent),
+                            extent=format_extent(enroute_extent, locale=loc),
                         )
                     elif imc_count > 0:
                         named_extent = imc_extent
                         enroute_detail = adv_t(
-                            "vfr.imc_over", loc, extent=format_extent(imc_extent),
+                            "vfr.imc_over", loc, extent=format_extent(imc_extent, locale=loc),
                         )
                     else:
                         enroute_detail = adv_t(
-                            "vfr.marginal", loc, extent=format_extent(enroute_extent),
+                            "vfr.marginal", loc, extent=format_extent(enroute_extent, locale=loc),
                         )
                 else:  # GREEN status but some points affected → minor clearance issues
                     enroute_detail = adv_t(
-                        "vfr.minor", loc, extent=format_extent(enroute_extent),
+                        "vfr.minor", loc, extent=format_extent(enroute_extent, locale=loc),
                     )
 
             # 5. En-route precipitation (visibility proxy) — capped at AMBER
@@ -1223,7 +1223,7 @@ class VFRFeasibilityEvaluator:
                     conv_key,
                     loc,
                     risk=conv_grade.worst_risk.value.upper(),
-                    extent=format_extent(conv_named_extent),
+                    extent=format_extent(conv_named_extent, locale=loc),
                 )
             # Coverage tolerance (#391), matching the axes above: a clear
             # convective verdict off soundings covering too little of the route
