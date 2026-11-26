@@ -688,6 +688,9 @@ def _snapshot_row(
         "temperature_2m_c": hourly.temperature_2m_c,
         "dewpoint_2m_c": hourly.dewpoint_2m_c,
         "visibility_m": hourly.visibility_m,
+        # NULL: the model's own visibility. The ICON GRIB builder sets the
+        # derived method's name when it fills visibility_m itself (#974).
+        "visibility_method": None,
         "wind_speed_10m_kt": hourly.wind_speed_10m_kt,
         "wind_direction_10m_deg": hourly.wind_direction_10m_deg,
         "wind_gusts_10m_kt": hourly.wind_gusts_10m_kt,
@@ -1764,8 +1767,18 @@ def _icon_rows(
     attached before the sounding pass; a point-hour without them is not
     covered (cloud cover is required) and is left to the next source.
     """
+    from weatherbrief.analysis.visibility.selection import (
+        derived_visibility_m,
+        derived_visibility_method,
+    )
     from weatherbrief.fetch.grib import _icon_diag_surface_fields, attach_icon_d2_explicit
+    from weatherbrief.fetch.grib.icon_eu_fetch import icon_native_feed
 
+    # DWD's native-grid feed has no VIS (#974): the selected derived method
+    # fills it, as the briefing does (_apply_icon_surface_to_sections), so
+    # map, outlook and alternates read the same ICON visibility as briefings.
+    # The legacy feed keeps DWD's own VIS and nothing is derived.
+    derive_vis = icon_native_feed()
     for valid, fhour in step_of.items():
         step = fields.get(fhour)
         if step is None:
@@ -1803,6 +1816,14 @@ def _icon_rows(
             snap.update(icon_lowest_level_columns(
                 step.surface[i] if i < len(step.surface) else None,
             ))
+            if derive_vis and snap.get("visibility_m") is None:
+                vis = derived_visibility_m(model, snap)
+                if vis is not None:
+                    # visibility_method marks it derived: the experiment's
+                    # ``native`` never scores it (visibility_verification).
+                    snap["visibility_m"] = vis
+                    snap["visibility_method"] = derived_visibility_method(model)
+                    hourly.visibility_m = vis
             yield snap, hourly
 
 
@@ -2589,6 +2610,7 @@ def _store_snapshots(snapshots: list[dict], db, region: str = "eu") -> int:
             "temperature_2m_c": snap.get("temperature_2m_c"),
             "dewpoint_2m_c": snap.get("dewpoint_2m_c"),
             "visibility_m": snap.get("visibility_m"),
+            "visibility_method": snap.get("visibility_method"),
             "wind_speed_10m_kt": snap.get("wind_speed_10m_kt"),
             "wind_direction_10m_deg": snap.get("wind_direction_10m_deg"),
             "wind_gusts_10m_kt": snap.get("wind_gusts_10m_kt"),

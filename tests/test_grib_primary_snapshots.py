@@ -1224,3 +1224,89 @@ class TestVisibilityInputs:
         assert row.surface_pressure_hpa == pytest.approx(1010.0)
         assert row.t850_c is not None and row.wind_speed_850_kt is not None
         assert row.lowest_level_rain_kg_kg is None
+
+
+class TestDerivedVisibility:
+    """#974: on DWD's native-grid feed (no VIS) the snapshot rows carry the
+    selected derived visibility, marked with its method, as briefings do;
+    on the legacy feed DWD's own VIS is kept and nothing is derived."""
+
+    LEVELS = {
+        p: {"raw_temperature_k": 280.0, "raw_relative_humidity_pct": 50.0,
+            "raw_u_wind_m_s": 5.0, "raw_v_wind_m_s": 0.0,
+            "raw_geopotential_m2_s2": 9.80665 * _isa_height_m(p)}
+        for p in (1000, 950, 925, 900, 850, 800, 700, 600, 500, 300)
+    }
+
+    def _rows(self, monkeypatch, feed, surface):
+        import weatherbrief.fetch.grib.icon_eu_fetch as ief
+        from weatherbrief.tasks import standalone_verification as sv
+        from weatherbrief.tasks.standalone_grib import GribSnapshotStep
+
+        if feed is None:
+            monkeypatch.delenv(ief.ICON_FEED_ENV_VAR, raising=False)
+        else:
+            monkeypatch.setenv(ief.ICON_FEED_ENV_VAR, feed)
+        # Cover comes from the cloud diagnostics, not under test here.
+        monkeypatch.setattr(sv, "_grib_hour_covered", lambda *a, **kw: True)
+        valid = INIT + timedelta(hours=6)
+        step = GribSnapshotStep(
+            pressure=[self.LEVELS],
+            surface=[{"u_10m": 3.0, "v_10m": 0.0, "pmsl": 101300.0,
+                      "tot_prec": 1.0, **surface}],
+            prev_surface=[{"tot_prec": 0.0}],
+            window_h=6,
+        )
+        return list(sv._icon_rows(
+            "icon", INIT, AIRPORTS[:1], {valid: 6}, {6: step}, None,
+        ))
+
+    def test_native_feed_fills_the_derived_method(self, monkeypatch):
+        # Saturated at 2 m: the bottom of the rh_icon curve, 400 m.
+        [(snap, hourly)] = self._rows(
+            monkeypatch, "v1", {"t_2m": 278.15, "td_2m": 278.15},
+        )
+        assert snap["visibility_m"] == 400.0
+        assert snap["visibility_method"] == "rh_icon"
+        # The hourly the row came from agrees (scoring reads it).
+        assert hourly.visibility_m == 400.0
+
+    def test_dry_air_reads_the_cap(self, monkeypatch):
+        [(snap, _)] = self._rows(monkeypatch, "v1", {"t_2m": 288.15, "td_2m": 278.15})
+        assert snap["visibility_m"] == 20000.0
+        assert snap["visibility_method"] == "rh_icon"
+
+    def test_legacy_feed_keeps_dwd_vis(self, monkeypatch):
+        [(snap, hourly)] = self._rows(
+            monkeypatch, None, {"t_2m": 278.15, "td_2m": 278.15, "vis": 12000.0},
+        )
+        assert snap["visibility_m"] == pytest.approx(12000.0)
+        assert snap["visibility_method"] is None
+        assert hourly.visibility_m == pytest.approx(12000.0)
+
+    def test_legacy_feed_without_vis_derives_nothing(self, monkeypatch):
+        [(snap, _)] = self._rows(monkeypatch, None, {"t_2m": 278.15, "td_2m": 278.15})
+        assert snap["visibility_m"] is None
+        assert snap["visibility_method"] is None
+
+    def test_missing_dewpoint_stays_unknown(self, monkeypatch):
+        [(snap, _)] = self._rows(monkeypatch, "v1", {"t_2m": 278.15})
+        assert snap["visibility_m"] is None
+        assert snap["visibility_method"] is None
+
+    def test_method_reaches_the_table(self, monkeypatch):
+        from sqlalchemy import create_engine, select
+        from sqlalchemy.orm import Session
+
+        from weatherbrief.db.models import AirportForecastSnapshotRow, Base
+        from weatherbrief.tasks import standalone_verification as sv
+
+        [(snap, _)] = self._rows(monkeypatch, "v1", {"t_2m": 278.15, "td_2m": 278.15})
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        with Session(engine) as db:
+            assert sv._store_snapshots([snap], db) == 1
+            db.commit()
+            row = db.execute(select(AirportForecastSnapshotRow)).scalar_one()
+        assert row.visibility_m == 400.0
+        assert row.visibility_method == "rh_icon"

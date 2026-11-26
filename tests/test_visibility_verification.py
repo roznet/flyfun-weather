@@ -78,6 +78,21 @@ class TestScoreCycleWritesMethods:
         assert data["m"]["fog_radiation"] is False  # daytime
 
     @patch("weatherbrief.airports.get_runway_ends", return_value={})
+    def test_derived_visibility_is_not_scored_as_native(self, _rwy, db_session):
+        # ICON on the native-grid feed (#974): visibility_m is rh_icon's.
+        _insert_snapshot(db_session, **{**FOGGY, "visibility_method": "rh_icon"})
+        _insert_observation(db_session, visibility_m=200, weather=json.dumps(["FG"]))
+        airports = [WatchlistAirport(icao="LFPG", lat=49.01, lon=2.55)]
+
+        _score_cycle(NOW, airports, "/fake/db", db_session)
+
+        data = json.loads(db_session.execute(select(VerificationScoreRow)).scalar_one()
+                          .visibility_methods)
+        assert "native" not in data["m"]
+        # Every derived method still runs on the row's inputs.
+        assert "rh_icon" in data["m"] and "sw99" in data["m"]
+
+    @patch("weatherbrief.airports.get_runway_ends", return_value={})
     def test_unknown_airport_has_no_night_flag(self, _rwy, db_session):
         _insert_snapshot(db_session)
         _insert_observation(db_session)
