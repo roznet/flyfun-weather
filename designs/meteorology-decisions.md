@@ -8556,7 +8556,7 @@ native visibility as the outside reference.
 CAT layers (Ri, E-Shear) and icing zones take their edges from the altitude
 of their first and last pressure level. Only a zone thinner than 1,000 ft is
 centred to ±500 ft (`e_shear._MIN_ZONE_HALF_FT`,
-`icing_common.MIN_ZONE_HALF_THICKNESS_FT`). So whether a cruise altitude
+`thin_layers.MIN_LAYER_HALF_THICKNESS_FT`). So whether a cruise altitude
 near an edge counts as "inside" can depend on whether the layer was merged
 or split, not on the atmosphere. Example: LSGS→EGTF at 10,000 ft on coarse
 ECMWF, where 700 hPa alone is `[9462, 10462]` (cruise inside) but merged with
