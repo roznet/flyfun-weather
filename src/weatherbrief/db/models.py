@@ -360,6 +360,51 @@ class FlightDebriefReportRow(Base):
     pushed_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
 
 
+class FlightFactsRow(Base):
+    """Small durable per-flight record for the past-flights finder (#1031).
+
+    1:1 sidecar to ``flights``, never touched by retention: T2 deletes a
+    flight's packs (and with them ``advisory_summary_json`` and
+    ``route_advisories.json``), this row keeps what the archive filters,
+    map and calendar need. Written by ``storage/flight_facts.py``
+    (``update_flight_facts``), which is the only writer.
+
+    ``forecast_tags_json``: worst status per debrief tag, amber or worse
+    only (``{"ICE": "red", "TS": "amber"}``), from the pack
+    ``default_forecast_pack`` chose (``forecast_pack_ts``). ``tags_recorded``
+    False means "not recorded" (no pack could be read), never "no hazard".
+    ``forecast_frozen_at`` set once the departure is behind the flight: the
+    tags no longer follow new packs.
+    """
+
+    __tablename__ = "flight_facts"
+
+    flight_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("flights.id", ondelete="CASCADE"), primary_key=True
+    )
+    departure_icao: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    destination_icao: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    departure_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    departure_lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    destination_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    destination_lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # [[lat, lon], ...] through every resolved waypoint, rounded to 3 dp.
+    route_line_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    distance_nm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    forecast_tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    forecast_pack_ts: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    tags_recorded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    forecast_frozen_at: Mapped[datetime | None] = mapped_column(TZDateTime(), nullable=True)
+    # Sorted tag list from the debrief answers and cancel reasons.
+    reported_tags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # flown | cancelled | monitoring; NULL = no debrief.
+    decision: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    debriefed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    interesting: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    differs_from_forecast: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime(), nullable=False)
+
+
 class FlightSubscriptionRow(Base):
     """Read-only subscription to another user's flight.
 

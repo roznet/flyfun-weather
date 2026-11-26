@@ -11,6 +11,9 @@ window.  FlightRow is kept for route history.
 Inactive users (no login or briefing usage within a threshold) get a shorter
 T2 window so stale data doesn't linger.
 
+Before T2 deletes a flight's packs, its past-flights record (``flight_facts``,
+#1031) is written and frozen; a flight whose record fails keeps its packs.
+
 Exemptions: PIREP-linked packs and pinned flights (``FlightRow.retention_pinned``,
 e.g. flights a talk links to) skip every tier; debriefed flights skip T2 only.
 
@@ -133,6 +136,13 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
         db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now, stats,
     )
 
+    # The past-flights record (#1031) must hold a flight's tags before T2
+    # takes the packs they come from: a flight whose record cannot be written
+    # keeps its packs this run.
+    no_facts = _ensure_facts_before_t2(
+        db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now,
+    )
+
     for pack, departure_time, user_id, pinned in rows:
         if pack.id in pirep_pack_ids:
             continue  # exempt: linked PIREP needs full forecast data
@@ -148,6 +158,8 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
         try:
             pack_dir = Path(pack.artifact_path) if pack.artifact_path else None
 
+            if pack.flight_id in no_facts:
+                continue
             if _t2_due(age_days, inactive, pack.flight_id in debriefed_flight_ids, config):
                 freed = _purge_full_pack(pack, pack_dir, config.dry_run)
                 stats.packs_t2 += 1
@@ -183,6 +195,35 @@ def _t2_due(age_days: int, inactive: bool, debriefed: bool, config: RetentionCon
     on when a flight's pack rows (the only route to its live files) go."""
     t2_days = config.t2_inactive_days if inactive else config.t2_active_days
     return age_days >= t2_days and not debriefed
+
+
+def _ensure_facts_before_t2(db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now) -> set[str]:
+    """Write (and freeze) the facts record of every flight with a pack T2 will
+    delete this run, unless already frozen. Returns the flights whose record
+    could not be written: their packs are left for the next run. Dry runs
+    write nothing and block nothing."""
+    from weatherbrief.db.models import FlightFactsRow
+    from weatherbrief.storage.flight_facts import safe_update_flight_facts
+
+    due: set[str] = set()
+    for pack, departure_time, user_id, pinned in rows:
+        if pinned or pack.id in pirep_pack_ids or departure_time is None:
+            continue
+        dep = departure_time if departure_time.tzinfo else departure_time.replace(tzinfo=timezone.utc)
+        if _t2_due((now - dep).days, user_id in inactive_user_ids, pack.flight_id in debriefed_flight_ids, config):
+            due.add(pack.flight_id)
+    if not due or config.dry_run:
+        return set()
+    frozen = set(db.execute(
+        select(FlightFactsRow.flight_id).where(
+            FlightFactsRow.flight_id.in_(due), FlightFactsRow.forecast_frozen_at.is_not(None),
+        )
+    ).scalars().all())
+    failed = set()
+    for flight_id in sorted(due - frozen):
+        if not safe_update_flight_facts(db, flight_id, now=now, freeze=True):
+            failed.add(flight_id)
+    return failed
 
 
 def kept_flight_ids(db: Session, debriefed_flight_ids: set[str] | None = None) -> set[str]:

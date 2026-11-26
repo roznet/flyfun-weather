@@ -129,6 +129,14 @@ def _load_owned_flight_or_404(db: Session, flight_id: str, user_id: str) -> Flig
     return row
 
 
+def _record_outcome(db: Session, flight_id: str) -> None:
+    """Past-flights record (#1031): reported tags and outcome follow every
+    debrief change. Never fails the request."""
+    from weatherbrief.storage.flight_facts import safe_update_flight_outcome
+
+    safe_update_flight_outcome(db, flight_id)
+
+
 # --- Endpoints ---
 
 
@@ -167,6 +175,7 @@ def upsert_flight_debrief(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    _record_outcome(db, flight_id)
     return DebriefResponse.from_model(saved)
 
 
@@ -179,6 +188,7 @@ def delete_flight_debrief(
     """Remove the debrief for a flight. Idempotent."""
     _load_owned_flight_or_404(db, flight_id, user_id)
     delete_debrief(db, flight_id)
+    _record_outcome(db, flight_id)
 
 
 @router.get("/debriefs/stats", response_model=StatsResponse)
@@ -257,6 +267,7 @@ def put_flight_debrief_answers(
                 raise HTTPException(status_code=422, detail=str(exc))
         items.append((question, a.answer, a.avoided, a.note))
     save_answers(db, flight_id, items, rules_version=REPORT_VERSION)
+    _record_outcome(db, flight_id)
     return with_answers(report, load_answers(db, flight_id))
 
 
