@@ -8546,3 +8546,34 @@ The experiment (`experiments.toml`, `icon-derived-visibility`) keeps scoring
 every method against METARs. After 2026-11-30 there is no native baseline:
 the check becomes rh_icon (and the others) against METARs, with ECMWF's
 native visibility as the outside reference.
+
+## 90. Layer edges stay at level altitudes; the merge/split flip is accepted (#869)
+
+**Date:** 2026-11-26 · **Issue:** #869 · **Related:** #866, #861, #539
+
+### Context
+
+CAT layers (Ri, E-Shear) and icing zones take their edges from the altitude
+of their first and last pressure level. Only a zone thinner than 1,000 ft is
+centred to ±500 ft (`e_shear._MIN_ZONE_HALF_FT`,
+`icing_common.MIN_ZONE_HALF_THICKNESS_FT`). So whether a cruise altitude
+near an edge counts as "inside" can depend on whether the layer was merged
+or split, not on the atmosphere. Example: LSGS→EGTF at 10,000 ft on coarse
+ECMWF, where 700 hPa alone is `[9462, 10462]` (cruise inside) but merged with
+925–850 it is `[2523, 9962]` (cruise outside).
+
+### Choice
+
+**Keep today's rule** (owner decision, 2026-11-04). No uniform margin on
+every edge, and no extension halfway to the neighbouring level. A uniform
+±500 ft margin (decided 2026-10-22, then withdrawn) would add exposure
+everywhere to fix a flip that only matters within a few hundred feet of an
+edge; the halfway extension adds about 1,700 ft per edge on coarse tables.
+
+### Accepted consequence
+
+A cruise altitude within a few hundred feet of a layer edge can flip between
+inside and outside when the grouper merges or splits layers. The turbulence
+advisory reads Ri layers only (`base_ft <= cruise <= top_ft`), and the icing
+advisory reads `icing_zones` only; E-Shear and SFIP bands are display-only.
+Revisit if a pilot report or replay shows a grade moving on such a flip.
