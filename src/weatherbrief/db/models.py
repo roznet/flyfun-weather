@@ -1216,6 +1216,12 @@ class AirportForecastSnapshotRow(Base):
     t850_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     td850_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     wind_speed_850_kt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Where ``visibility_m`` came from (#974/#979): NULL = the model's own
+    # visibility (or none), else the derived method that filled it
+    # (analysis/visibility/selection.py), e.g. ``rh_icon`` for ICON on DWD's
+    # native-grid feed. The visibility experiment scores ``native`` only on
+    # NULL rows, so a derived value is never scored as the model's own.
+    visibility_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 def snapshot_natural_key(

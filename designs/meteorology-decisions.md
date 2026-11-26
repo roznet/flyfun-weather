@@ -8492,7 +8492,7 @@ on more PIREP data before it changes grades.
 
 ---
 
-## 89. ICON visibility on the native-grid feed: `rh_icon`, briefing path first (#979 phase 3)
+## 89. ICON visibility on the native-grid feed: `rh_icon`, briefings and snapshots (#979 phase 3)
 
 **Date:** 2026-11-23 · **Issue:** #979 · **Builds on:** §78 (no VIS on v1), §80 (methods and promotion bar)
 
@@ -8525,12 +8525,17 @@ a ceiling-only ICON; the method can change later if the experiment says so.
   only when the slot reads the v1 feed: on legacy, DWD's VIS is used and
   nothing is derived, so the two never mix in a slot. Open-Meteo fallback
   points keep Open-Meteo's own visibility (GRIB fills empty fields only).
-- **Briefing path only.** The forecast-map / alternates snapshots (Mac mini)
-  stay on the legacy feed, with DWD's VIS, until it ends on 2026-11-30. They
-  are also what the experiment scores, and `native` reads the snapshot's
-  `visibility_m`: writing a derived value there would score it as "native".
-  Wiring snapshots needs that provenance kept apart first (follow-up, before
-  the mini switches).
+- **Snapshots too, with provenance (2026-11-26, #974).** The forecast-map /
+  area-outlook / alternates snapshots fill `visibility_m` the same way when
+  they read the v1 feed (`_icon_rows`, same table, same rule: only where DWD's
+  VIS is missing), so map and briefing agree on ICON. Each such row records
+  the method in `airport_forecast_snapshots.visibility_method` (migration
+  122; NULL = the model's own). The experiment scores `native` only on NULL
+  rows, so a derived value is never scored as DWD's. The mini stays on the
+  legacy feed until 2026-11-30; the droplet's in-process alternates search
+  was already on v1 since the briefing switch and had no ICON visibility
+  until this. Snapshots carry the lowest-level inputs, so `icon_blend` would
+  work there, but one method per model holds across both paths.
 
 ### To measure
 

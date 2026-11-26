@@ -74,13 +74,20 @@ def score_payload(snap: Any, lat: float | None, lon: float | None) -> str:
 
     ``lat``/``lon`` give the night flag (radiation-fog rule); unknown
     coordinates leave it None, which skips that rule only.
+
+    A row whose ``visibility_m`` a derived method filled (``visibility_method``
+    set, ICON on DWD's native-grid feed) has no model visibility: ``native``
+    is skipped there, so it is never the derived value scored twice.
     """
     night = (
         is_night(lat, lon, snap.forecast_hour)
         if lat is not None and lon is not None and getattr(snap, "forecast_hour", None)
         else None
     )
-    methods = run_all(VisibilityInputs.from_snapshot(snap, is_night=night))
+    inp = VisibilityInputs.from_snapshot(snap, is_night=night)
+    if getattr(snap, "visibility_method", None):
+        inp.visibility_m = None
+    methods = run_all(inp)
     return json.dumps(
         {"v": METHODS_VERSION, "night": night, "m": methods},
         separators=(",", ":"),
