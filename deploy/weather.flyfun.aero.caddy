@@ -31,6 +31,10 @@ weather.flyfun.aero {
                 delete state
                 delete token
             }
+            # The token also rides on the /auth/verify 302 Location and on the
+            # Referer of requests made from /auth-verify.html.
+            request>headers>Referer regexp "token=[^&]*" "token=REDACTED"
+            resp_headers>Location regexp "token=[^&]*" "token=REDACTED"
         }
     }
 
