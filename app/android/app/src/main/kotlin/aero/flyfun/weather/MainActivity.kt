@@ -48,6 +48,7 @@ import aero.flyfun.weather.ui.auth.LoginScreen
 import aero.flyfun.weather.ui.briefing.BriefingContainerScreen
 import aero.flyfun.weather.ui.flights.AddFlightSheet
 import aero.flyfun.weather.ui.flights.FlightListScreen
+import aero.flyfun.weather.ui.flights.PastFlightsScreen
 import aero.flyfun.weather.ui.flights.SharedFlightPreviewSheet
 import aero.flyfun.weather.ui.help.SettingsScreen
 import aero.flyfun.weather.ui.help.WhatsNewScreen
@@ -63,6 +64,7 @@ import aero.flyfun.weather.viewmodel.BriefingViewModel
 import aero.flyfun.weather.viewmodel.FlightListViewModel
 import aero.flyfun.weather.viewmodel.ForecastMapViewModel
 import aero.flyfun.weather.viewmodel.HistoricalMapViewModel
+import aero.flyfun.weather.viewmodel.PastFlightsViewModel
 import aero.flyfun.weather.viewmodel.TripsViewModel
 import aero.flyfun.weather.viewmodel.SetupWizardViewModel
 import aero.flyfun.weather.viewmodel.UiTestLaunch
@@ -126,6 +128,8 @@ private enum class RootRoute {
     FLIGHTS,
     BRIEFING,
     TRIP,
+    /** Past flights finder (#1032). */
+    PAST,
     MAP_FORECAST,
     MAP_HISTORICAL,
     AIRCRAFT,
@@ -142,6 +146,7 @@ private sealed interface RootScreen {
         val openObserved: Boolean = false,
     ) : RootScreen
     data class TripDetail(val tripId: String) : RootScreen
+    data object PastFlights : RootScreen
     data class PanEuropeanMap(
         val initialMode: PanEuropeanMapMode = PanEuropeanMapMode.FORECAST,
     ) : RootScreen
@@ -207,6 +212,10 @@ fun FlyFunWeatherRoot(
         ).also { it.loadFlights() }
     }
 
+    val pastFlightsViewModel: PastFlightsViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "pastFlights") {
+        PastFlightsViewModel(repository = appState.repository)
+    }
+
     val tripsViewModel: TripsViewModel = viewModel(viewModelStoreOwner = sessionOwner, key = "trips") {
         TripsViewModel(tripRepository = appState.tripRepository)
     }
@@ -239,6 +248,8 @@ fun FlyFunWeatherRoot(
     var currentRoute by rememberSaveable(sessionKey) { mutableStateOf(RootRoute.FLIGHTS) }
     /** Where the full forecast map's Back returns: the briefing when opened from its route map (#998). */
     var mapReturnRoute by rememberSaveable(sessionKey) { mutableStateOf(RootRoute.FLIGHTS) }
+    /** Where a briefing's Back returns: the Past flights screen when opened from it (#1032). */
+    var briefingReturnRoute by rememberSaveable(sessionKey) { mutableStateOf(RootRoute.FLIGHTS) }
     var activeFlightId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activeTripId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
     var activePackTimestamp by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
@@ -303,6 +314,7 @@ fun FlyFunWeatherRoot(
             val tId = activeTripId
             if (tId != null) RootScreen.TripDetail(tId) else RootScreen.Flights
         }
+        RootRoute.PAST -> RootScreen.PastFlights
         RootRoute.MAP_FORECAST -> RootScreen.PanEuropeanMap(PanEuropeanMapMode.FORECAST)
         RootRoute.MAP_HISTORICAL -> RootScreen.PanEuropeanMap(PanEuropeanMapMode.HISTORICAL)
         RootRoute.AIRCRAFT -> RootScreen.AircraftList
@@ -356,7 +368,9 @@ fun FlyFunWeatherRoot(
         packTimestamp: String? = null,
         openObserved: Boolean = false,
         forceReload: Boolean = false,
+        returnRoute: RootRoute = RootRoute.FLIGHTS,
     ) {
+        briefingReturnRoute = returnRoute
         cachedFlightForBriefing = flight
         // Tapping the selected flight again from another screen is a fresh open: reload it, and
         // so is coming back from editing it (same id, new values, maybe a refresh queued).
@@ -376,7 +390,14 @@ fun FlyFunWeatherRoot(
         activePackTimestamp = null
         activeOpenObserved = false
         flightListViewModel.loadFlights()
-        currentRoute = RootRoute.FLIGHTS
+        currentRoute = briefingReturnRoute
+        briefingReturnRoute = RootRoute.FLIGHTS
+    }
+
+    /** "See all" / "Search past" on the list's Past section (#1032), carrying its search. */
+    fun openPastFlights(query: String) {
+        pastFlightsViewModel.update { it.copy(query = query.trim()) }
+        currentRoute = RootRoute.PAST
     }
 
     // Consume deep-link / universal-link navigation target
@@ -475,6 +496,19 @@ fun FlyFunWeatherRoot(
                 onOpenWhatsNew = { currentRoute = RootRoute.WHATS_NEW },
             )
         }
+        RootScreen.PastFlights -> {
+            PastFlightsScreen(
+                viewModel = pastFlightsViewModel,
+                onBack = { currentRoute = RootRoute.FLIGHTS },
+                onOpenFlight = { flightId ->
+                    openBriefing(
+                        flightId = flightId,
+                        flight = allFlights.firstOrNull { it.id == flightId },
+                        returnRoute = RootRoute.PAST,
+                    )
+                },
+            )
+        }
         is RootScreen.TripDetail -> {
             TripDetailScreen(
                 tripId = screen.tripId,
@@ -515,6 +549,7 @@ fun FlyFunWeatherRoot(
                         onOpenMapsClick = {
                             currentRoute = RootRoute.MAP_FORECAST
                         },
+                        onOpenPastClick = { query -> openPastFlights(query) },
                         onOpenWhatsNewClick = {
                             currentRoute = RootRoute.WHATS_NEW
                         },
@@ -591,6 +626,7 @@ fun FlyFunWeatherRoot(
                         onOpenMapsClick = {
                             currentRoute = RootRoute.MAP_FORECAST
                         },
+                        onOpenPastClick = { query -> openPastFlights(query) },
                         onOpenWhatsNewClick = {
                             currentRoute = RootRoute.WHATS_NEW
                         },

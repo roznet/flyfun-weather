@@ -24,6 +24,8 @@ interface BriefingRepository {
     suspend fun durationEstimate(req: DurationEstimateRequest): DurationEstimateResponse
     suspend fun aircraftPresets(icaoType: String, cruiseSpeedKt: Int?): PerformancePresetsResponse
     suspend fun fetchAutorouterRoutes(limit: Int = 25): AutorouterRoutesResponse
+    /** Past flights finder (#1032): online-only, every filter and count is the server's. */
+    suspend fun pastArchive(query: List<Pair<String, String>>): PastArchiveResponse
 
     // Pack metadata
     suspend fun listPacks(flightId: String): List<PackMetaResponse>
@@ -290,6 +292,9 @@ open class OnlineBriefingRepository(
 
     override suspend fun debriefReport(flightId: String): DebriefReport =
         api.getDebriefReport(flightId)
+
+    override suspend fun pastArchive(query: List<Pair<String, String>>): PastArchiveResponse =
+        api.getPastArchive(query)
 
     override suspend fun saveDebriefAnswers(flightId: String, req: DebriefAnswersRequest): DebriefReport =
         api.saveDebriefAnswers(flightId, req)

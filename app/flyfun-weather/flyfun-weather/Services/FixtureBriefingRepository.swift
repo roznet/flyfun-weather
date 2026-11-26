@@ -304,6 +304,12 @@ final class FixtureBriefingRepository: BriefingRepository, CacheStatusReporting 
     func frequentAirports() async throws -> FrequentAirportsResponse {
         throw FixtureError.notProvided("frequentAirports")
     }
+    /// Demo flights have no archive: an empty Past screen, not an error.
+    func pastArchive(_ query: [URLQueryItem]) async throws -> PastArchiveResponse {
+        PastArchiveResponse(view: "list", total: 0, limit: 0, offset: 0,
+                            facets: PastArchiveFacets(source: "forecast", tags: [:], outcomes: [:], notRecorded: 0),
+                            rows: [])
+    }
     func historicalMap(at: Date, lead: Int) async throws -> HistoricalMapResponse {
         throw FixtureError.notProvided("historicalMap")
     }

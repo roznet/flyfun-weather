@@ -547,9 +547,38 @@ html {
 /* Collapsing the past section takes its filter with it, alongside the list
    and the "show more" button. */
 .past-flights-section.collapsed .list-filter-row-inset,
-.past-flights-section.collapsed .list-filter-nomatch {
+.past-flights-section.collapsed .list-filter-nomatch,
+.past-flights-section.collapsed .past-chips,
+.past-flights-section.collapsed .btn-show-more-past {
   display: none;
 }
+
+/* Past finder chips (#1032): counts come from the server. Hazard chips are
+   solid; "Reported" (and hazard chips while it is on) are dashed. */
+.past-chips { margin: 0.4rem 0 0.6rem 1rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.past-chip-row { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.past-chip {
+  border: 1px solid var(--border);
+  background: var(--card-bg, transparent);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.past-chip.is-on { background: var(--primary, #2563eb); border-color: var(--primary, #2563eb); color: #fff; }
+.past-chip-reported { border-style: dashed; }
+.past-chip-count { opacity: 0.7; font-variant-numeric: tabular-nums; }
+.past-hazards { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.25rem 0; }
+.past-hazard {
+  font-size: 0.75rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+}
+.past-hazard::before { content: "●"; margin-right: 0.25rem; }
+.past-hazard-amber { color: var(--amber); background: var(--amber-bg); }
+.past-hazard-red { color: var(--red); background: var(--red-bg); }
+.past-hazard-none, .past-reported { font-size: 0.8rem; color: var(--text-muted); }
 
 .list-filter {
   display: flex;

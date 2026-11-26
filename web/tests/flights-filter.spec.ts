@@ -1,6 +1,6 @@
 /** Flights-list ICAO filter (#542) — browser behaviour.
  *
- *  The unit suite covers the matcher, the `past_q` endpoint and the store's
+ *  The unit suite covers the matcher, the archive endpoint and the store's
  *  race/prune logic. What it structurally cannot cover is everything below:
  *  the suite runs `environment: 'node'`, and jsdom would not help because it
  *  performs no layout, so computed visibility and `offsetHeight` are
@@ -70,6 +70,32 @@ async function stubList(page: Page, flights: ReturnType<typeof flight>[]): Promi
     const kept = flights.filter(f => f.section !== 'past' || matches(f));
     const pastCount = kept.filter(f => f.section === 'past').length;
     route.fulfill({ json: kept, headers: { 'X-Past-Total': String(pastCount) } });
+  });
+  return () => seenQueries;
+}
+
+/** Serve the past-flights archive (#1032) from the same fixture: past rows
+ *  only, `q` applied like the server's route matcher, counts in `total`. */
+async function stubArchive(page: Page, flights: ReturnType<typeof flight>[]): Promise<() => string[]> {
+  const seenQueries: string[] = [];
+  await page.route(/\/api\/flights\/archive(\?.*)?$/, route => {
+    const url = new URL(route.request().url());
+    const q = url.searchParams.get('q') ?? '';
+    seenQueries.push(q);
+    const tokens = q.split(/\s+/).filter(Boolean).map(s => s.toUpperCase());
+    const rows = flights
+      .filter(f => f.section === 'past')
+      .filter(f => tokens.every(tok => f.waypoints.some(w => w.toUpperCase().startsWith(tok))))
+      .map(f => ({
+        id: f.id, departure_time: f.departure_time, departure: f.waypoints[0],
+        destination: f.waypoints[f.waypoints.length - 1], route_name: f.route_name, trip: null,
+        forecast_tags: {}, forecast_worst: null, tags_recorded: true, reported_tags: [],
+        decision: null, debriefed: false, differs_from_forecast: false, distance_nm: null,
+      }));
+    route.fulfill({ json: {
+      view: 'list', total: rows.length, limit: 20, offset: 0, rows,
+      facets: { source: 'forecast', tags: {}, outcomes: {}, not_recorded: 0 },
+    } });
   });
   return () => seenQueries;
 }
@@ -186,7 +212,8 @@ test.describe('past filter', () => {
 
   test('appears once the past section is worth filtering, and queries the server', async ({ page }) => {
     await stubPage(page);
-    const queries = await stubList(page, withPast(6));
+    await stubList(page, withPast(6));
+    const queries = await stubArchive(page, withPast(6));
     await page.goto('/');
 
     // Past starts collapsed; expanding reveals the filter.
@@ -210,6 +237,7 @@ test.describe('past filter', () => {
     // trigger, which reproduces it without waiting on refresh polling.
     await stubPage(page);
     await stubList(page, withPast(6));
+    await stubArchive(page, withPast(6));
     await page.goto('/');
     await page.locator('#past-flights-toggle').click();
 
@@ -221,5 +249,39 @@ test.describe('past filter', () => {
     await page.locator('.flight-select-checkbox').first().check();
 
     await expect(input).toHaveValue('LES');
+  });
+
+  test('a hazard chip asks the server and shows its count', async ({ page }) => {
+    await stubPage(page);
+    await stubList(page, withPast(6));
+    const seen: string[] = [];
+    await page.route(/\/api\/flights\/archive(\?.*)?$/, route => {
+      const url = new URL(route.request().url());
+      seen.push(url.searchParams.get('tags') ?? '');
+      const iced = url.searchParams.get('tags') === 'ICE';
+      const all = withPast(6).filter(f => f.section === 'past');
+      const rows = (iced ? all.slice(0, 1) : all).map((f, i) => ({
+        id: f.id, departure_time: f.departure_time, departure: f.waypoints[0],
+        destination: f.waypoints[1], route_name: f.route_name, trip: null,
+        forecast_tags: i === 0 ? { ICE: 'red' } : {}, forecast_worst: i === 0 ? 'red' : null,
+        tags_recorded: i !== 1, reported_tags: [], decision: null, debriefed: false,
+        differs_from_forecast: false, distance_nm: null,
+      }));
+      route.fulfill({ json: {
+        view: 'list', total: rows.length, limit: 20, offset: 0, rows,
+        facets: { source: 'forecast', tags: { ICE: 1 }, outcomes: {}, not_recorded: 1 },
+      } });
+    });
+    await page.goto('/');
+    await page.locator('#past-flights-toggle').click();
+    await expect(page.locator('.past-flights-list .flight-card')).toHaveCount(6);
+    await expect(page.locator('.past-row').nth(1)).toContainText('Hazards not recorded');
+
+    const ice = page.locator('[data-past-tag="ICE"]');
+    await expect(ice).toContainText('1');
+    await ice.click();
+    await expect.poll(() => seen.includes('ICE')).toBe(true);
+    await expect(page.locator('.past-flights-list .flight-card')).toHaveCount(1);
+    await expect(page.locator('[data-past-tag="ICE"]')).toHaveAttribute('aria-pressed', 'true');
   });
 });

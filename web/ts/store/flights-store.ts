@@ -1,14 +1,16 @@
 /** Zustand vanilla store for the Flights management page. */
 
 import { createStore } from 'zustand/vanilla';
-import type { DebriefStats, FlightResponse, TripResponse } from './types';
+import type { ArchiveFacets, ArchiveRow, DebriefStats, FlightResponse, TripResponse } from './types';
+import { archiveParams, EMPTY_PAST_FILTER, type PastFilterState } from '../helpers/past-archive';
 import type { RefreshEntry } from '../adapters/api-adapter';
 import * as api from '../adapters/api-adapter';
 import { fetchDebriefStats } from '../adapters/debrief-adapter';
 import { addTripLegs, createTrip, fetchTrips, removeTripLeg } from '../adapters/trips-adapter';
 import { errorToMessage } from '../utils';
 
-/** Past-section page size. Future + recent are never paginated. */
+/** Past-section page size. Future + recent are never paginated; past comes
+ *  from the archive endpoint (#1031), never from `/api/flights`. */
 export const PAST_PAGE_SIZE = 20;
 
 export interface FlightsState {
@@ -19,7 +21,12 @@ export interface FlightsState {
    *  without re-deriving the binding rule in the browser — it lives in exactly
    *  one place, on the server. Empty for a user with no trips. */
   trips: TripResponse[];
-  pastTotal: number;  // full count of "past" flights (for the "Show more" gate)
+  /** Past rows from `GET /api/flights/archive` (#1032): owned flights only,
+   *  filtered, paged and counted by the server. */
+  pastRows: ArchiveRow[];
+  pastTotal: number;  // matches for the current past filter (for the "Show more" gate)
+  /** Server chip counts for the current past filter. */
+  pastFacets: ArchiveFacets | null;
   activeRefreshes: Record<string, RefreshEntry>; // flight_id → active refresh entry
   debriefStats: DebriefStats | null;
 
@@ -33,10 +40,11 @@ export interface FlightsState {
 
   // Filters (#542). Two independent, section-scoped queries: `upcomingQuery`
   // filters future + recent purely in the browser (those sections always come
-  // back in full), while `pastQuery` round-trips to the server because the
-  // past section is paginated and the matches may not be loaded yet.
+  // back in full), while the past filter (search + chips, #1032) round-trips
+  // to the archive endpoint because the past section is paginated and counted
+  // on the server.
   upcomingQuery: string;
-  pastQuery: string;
+  pastFilter: PastFilterState;
 
   // Actions
   loadFlights: () => Promise<void>;
@@ -48,6 +56,10 @@ export interface FlightsState {
   loadMorePast: () => Promise<void>;
   setUpcomingQuery: (q: string) => void;
   setPastQuery: (q: string) => Promise<void>;
+  /** Change chips / source / hide and reload the first past page. */
+  setPastFilter: (patch: Partial<PastFilterState>) => Promise<void>;
+  /** Reload the first past page for the current filter. */
+  loadPast: () => Promise<void>;
   loadDebriefStats: () => Promise<void>;
   pollActiveRefreshes: () => Promise<void>;
   createFlight: (waypoints: string[], targetDate: string, opts?: {
@@ -84,10 +96,16 @@ export interface FlightsState {
  */
 let flightsLoadSeq = 0;
 
+/** Same guard for the past rows: filter changes, "show more" and reloads of
+ *  the archive race each other, and the newest request started wins. */
+let pastLoadSeq = 0;
+
 export const flightsStore = createStore<FlightsState>((set, get) => ({
   flights: [],
   trips: [],
+  pastRows: [],
   pastTotal: 0,
+  pastFacets: null,
   activeRefreshes: {},
   debriefStats: null,
   loading: false,
@@ -97,35 +115,51 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   error: null,
   selectedIds: new Set(),
   upcomingQuery: '',
-  pastQuery: '',
+  pastFilter: EMPTY_PAST_FILTER,
 
   loadFlights: async () => {
     const seq = ++flightsLoadSeq;
     set({ loading: true, error: null });
+    // Past rows come from the archive (#1032), fetched alongside: a failure
+    // there must not hide the upcoming list.
+    const past = get().loadPast();
     try {
       // The card and the debrief form read everything they need from each
       // flight's inline `latest_briefing`, so a single request paints the
-      // page — no per-flight /packs/latest round-trips. Only the past section
-      // is paginated; future + recent always come back in full.
-      // Any active past filter rides along so a background reload (e.g. after
-      // a debrief) doesn't silently drop it.
-      const { flights, pastTotal } = await api.fetchFlights({
-        pastLimit: PAST_PAGE_SIZE,
-        pastQuery: get().pastQuery || undefined,
-      });
-      // Superseded (e.g. the user typed a filter while this was in flight):
-      // drop the stale payload, but still clear our own spinner.
+      // page — no per-flight /packs/latest round-trips. `pastLimit: 0`: the
+      // past section is the archive's, so /api/flights only sends future +
+      // recent.
+      const { flights } = await api.fetchFlights({ pastLimit: 0 });
+      // Superseded (e.g. a reload after a debrief): drop the stale payload,
+      // but still clear our own spinner.
       if (seq !== flightsLoadSeq) {
         set({ loading: false });
         return;
       }
-      set({ flights, pastTotal, loading: false, loaded: true });
+      set({ flights, loading: false, loaded: true });
     } catch (err) {
       if (seq !== flightsLoadSeq) {
         set({ loading: false });
         return;
       }
       set({ loading: false, error: `Failed to load flights: ${err}` });
+    }
+    await past;
+  },
+
+  loadPast: async () => {
+    const seq = ++pastLoadSeq;
+    set({ pastFiltering: true });
+    try {
+      const resp = await api.fetchArchive(
+        archiveParams(get().pastFilter, { limit: PAST_PAGE_SIZE, offset: 0 }),
+      );
+      // Only the newest request owns the rows and the busy flag.
+      if (seq !== pastLoadSeq) return;
+      set({ pastRows: resp.rows, pastTotal: resp.total, pastFacets: resp.facets, pastFiltering: false });
+    } catch (err) {
+      if (seq !== pastLoadSeq) return;
+      set({ error: `Failed to load past flights: ${err}`, pastFiltering: false });
     }
   },
 
@@ -183,59 +217,43 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
   },
 
   setPastQuery: async (q) => {
-    const seq = ++flightsLoadSeq;
     // Reset to the first page: offsets from the previous query index into a
-    // different result set. `pastFiltering` gives the section a busy state:
-    // unlike the client-side upcoming filter, this is a network round-trip, so
-    // without it the list just sits there looking stale on a slow connection.
-    set({ pastQuery: q, pastFiltering: true });
-    try {
-      const { flights, pastTotal } = await api.fetchFlights({
-        pastLimit: PAST_PAGE_SIZE,
-        pastQuery: q || undefined,
-      });
-      // Only the newest request owns the flag; a superseded one clearing it
-      // would drop the busy state while a later query is still running.
-      if (seq !== flightsLoadSeq) return;
-      set({ flights, pastTotal, loaded: true, pastFiltering: false });
-    } catch (err) {
-      if (seq !== flightsLoadSeq) return;
-      set({ error: `Failed to filter flights: ${err}`, pastFiltering: false });
-    }
+    // different result set. `pastFiltering` gives the section a busy state.
+    set({ pastFilter: { ...get().pastFilter, q } });
+    await get().loadPast();
+  },
+
+  setPastFilter: async (patch) => {
+    set({ pastFilter: { ...get().pastFilter, ...patch } });
+    await get().loadPast();
   },
 
   loadMorePast: async () => {
     // Guard against rapid double-clicks: until the in-flight page lands,
-    // loadedPast wouldn't advance, so concurrent calls would all request the
-    // same offset and waste round-trips.
+    // the offset wouldn't advance, so concurrent calls would all request the
+    // same page and waste round-trips.
     if (get().loadingMore) return;
-    const seq = ++flightsLoadSeq;
-    const current = get().flights;
-    const loadedPast = current.filter((f) => f.section === 'past').length;
+    const seq = ++pastLoadSeq;
+    const current = get().pastRows;
     set({ loadingMore: true });
     try {
-      const { flights: page, pastTotal } = await api.fetchFlights({
-        pastLimit: PAST_PAGE_SIZE,
-        pastOffset: loadedPast,
-        // Under a filter, `loadedPast` counts loaded *matches*, which is the
-        // right offset into the filtered set the server is paging.
-        pastQuery: get().pastQuery || undefined,
-      });
-      // Superseded by a filter change or reload started after this page: both
-      // `current` and the page itself describe the old query, so appending
-      // would revert the list to stale rows under a filter that no longer
-      // matches them.
-      if (seq !== flightsLoadSeq) {
+      const resp = await api.fetchArchive(
+        archiveParams(get().pastFilter, { limit: PAST_PAGE_SIZE, offset: current.length }),
+      );
+      // Superseded by a filter change or reload started after this page:
+      // appending would mix rows from the old filter into the new one.
+      if (seq !== pastLoadSeq) {
         set({ loadingMore: false });
         return;
       }
-      // The page also re-lists future + recent (always returned in full); keep
-      // only the genuinely new past rows and append them to the past bucket.
-      const existingIds = new Set(current.map((f) => f.id));
-      const newPast = page.filter((f) => f.section === 'past' && !existingIds.has(f.id));
-      set({ flights: [...current, ...newPast], pastTotal, loadingMore: false });
+      const existingIds = new Set(current.map((r) => r.id));
+      const fresh = resp.rows.filter((r) => !existingIds.has(r.id));
+      set({
+        pastRows: [...current, ...fresh], pastTotal: resp.total, pastFacets: resp.facets,
+        loadingMore: false,
+      });
     } catch (err) {
-      if (seq !== flightsLoadSeq) {
+      if (seq !== pastLoadSeq) {
         set({ loadingMore: false });
         return;
       }

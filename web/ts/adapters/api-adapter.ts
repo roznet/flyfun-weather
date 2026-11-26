@@ -1,6 +1,7 @@
 /** API communication layer — all backend calls go through here. */
 
 import type {
+  ArchiveListResponse,
   CreateFlightRequest,
   DataStatus,
   ElevationProfile,
@@ -74,6 +75,13 @@ export async function fetchFlights(opts?: {
     flights,
     pastTotal: pastTotal ?? flights.filter((f) => f.section === 'past').length,
   };
+}
+
+/** One page of the past-flights archive (#1031): the server filters, pages
+ *  and counts (facets); build the query with `helpers/past-archive`. */
+export async function fetchArchive(params: URLSearchParams): Promise<ArchiveListResponse> {
+  const qs = params.toString();
+  return apiFetch<ArchiveListResponse>(`/flights/archive${qs ? `?${qs}` : ''}`);
 }
 
 export async function fetchFlight(id: string): Promise<FlightResponse> {
