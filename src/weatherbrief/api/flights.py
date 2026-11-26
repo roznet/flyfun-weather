@@ -1949,6 +1949,8 @@ def get_flight_archive(
         hide_list = parse_csv(hide, OUTCOMES, "hide")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="'from' is after 'to'")
     return build_archive(
         db, user_id, q=q, tags=tag_list, source=source, outcome=outcome_list, hide=hide_list,
         date_from=date_from, date_to=date_to, view=view, year=year, limit=limit, offset=offset,

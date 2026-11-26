@@ -170,6 +170,10 @@ def _calendar(items, year: int) -> list[dict]:
 
 
 def _map(items) -> dict:
+    """Airports and route bundles. A flight with no resolved destination, or
+    one that lands where it left (a local flight), counts at its departure
+    airport only and draws no route; one with no departure coordinates is
+    ``unplaced``."""
     airports: dict[str, dict] = {}
     routes: dict[tuple[str, str], dict] = {}
     unplaced = 0
