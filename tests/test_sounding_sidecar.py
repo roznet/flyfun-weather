@@ -35,6 +35,7 @@ from weatherbrief.storage.sounding_profiles import (
     build_sounding_sidecar,
     load_or_build_sounding_profile,
     read_sounding_sidecar,
+    sidecar_sounding_profile,
     write_sounding_sidecar,
 )
 from weatherbrief.tasks.artifacts import save_analysis_artifacts, save_fetch_artifacts
@@ -261,3 +262,34 @@ def test_write_sidecar_empty_writes_nothing(tmp_path):
     count = write_sounding_sidecar(pd, {"models": [], "analyses": []}, {"cross_sections": []})
     assert count == 0
     assert not (pd / SIDECAR_FILENAME).exists()
+
+
+# ---------------------------------------------------------------------------
+# Per-point endpoint: sidecar hit parses neither route_analyses nor cross-section
+# ---------------------------------------------------------------------------
+
+
+def test_sidecar_sounding_profile_needs_no_pack_json(pack_dir):
+    """The sidecar alone serves a profile; a missing sidecar returns None."""
+    (pack_dir / "cross_section.json").unlink()
+    (pack_dir / "route_analyses.json").unlink()
+    profile = sidecar_sounding_profile(pack_dir, 0, _MODEL)
+    assert profile is not None and profile.levels
+    assert sidecar_sounding_profile(pack_dir, 99, _MODEL) is None
+
+    (pack_dir / SIDECAR_FILENAME).unlink()
+    assert sidecar_sounding_profile(pack_dir, 0, _MODEL) is None
+
+
+def test_endpoint_serves_sidecar_without_parsing_pack_json(monkeypatch, pack_dir):
+    """get_sounding_profile must not touch the ~17 MB cross_section.json (or
+    route_analyses.json) when the sidecar has the entry (11-26 pool incident)."""
+    from weatherbrief.api import packs
+
+    expected = sidecar_sounding_profile(pack_dir, 0, _MODEL)
+    (pack_dir / "cross_section.json").unlink()
+    (pack_dir / "route_analyses.json").unlink()
+    monkeypatch.setattr(packs, "_get_pack_dir_released", lambda *a, **k: pack_dir)
+
+    result = packs.get_sounding_profile("f", "ts", 0, _MODEL, user_id="u", db=None)
+    assert result.model_dump() == expected.model_dump()

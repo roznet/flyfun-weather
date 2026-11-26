@@ -339,27 +339,36 @@ def read_sounding_sidecar(pack_dir: Path) -> dict | None:
         return None
 
 
+def sidecar_sounding_profile(
+    pack_dir: Path, point_index: int, model: str,
+) -> SoundingProfileResponse | None:
+    """One profile from the sidecar alone, or *None* if absent/missing the key.
+
+    Needs neither ``route_analyses.json`` nor ``cross_section.json`` — the
+    per-point endpoint calls this first and only parses those (the
+    cross-section is ~17 MB, ~1.2 s to parse on prod) on a sidecar miss.
+    """
+    sidecar = read_sounding_sidecar(pack_dir)
+    if sidecar is None:
+        return None
+    entry = sidecar.get(_sounding_key(point_index, model))
+    return SoundingProfileResponse.model_validate(entry) if entry is not None else None
+
+
 def load_or_build_sounding_profile(
     pack_dir: Path,
     ra_data: dict,
     cs_data: dict,
     point_index: int,
     model: str,
-    *,
-    _sidecar: dict | None = None,
 ) -> SoundingProfileResponse | None:
     """Return one sounding profile, preferring the sidecar over recompute.
 
     1. If the sidecar is present and holds ``sounding-{pt}-{model}``, validate
        and return it (no MetPy recompute).
     2. Otherwise fall back to :func:`_build_sounding_profile` (on-the-fly).
-
-    Pass ``_sidecar`` to reuse an already-gunzipped sidecar across calls within
-    one request.
     """
-    sidecar = _sidecar if _sidecar is not None else read_sounding_sidecar(pack_dir)
-    if sidecar is not None:
-        entry = sidecar.get(_sounding_key(point_index, model))
-        if entry is not None:
-            return SoundingProfileResponse.model_validate(entry)
+    profile = sidecar_sounding_profile(pack_dir, point_index, model)
+    if profile is not None:
+        return profile
     return _build_sounding_profile(ra_data, cs_data, point_index, model)

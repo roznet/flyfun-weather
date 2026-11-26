@@ -66,6 +66,7 @@ from weatherbrief.storage.sounding_profiles import (
     build_sounding_sidecar,
     load_or_build_sounding_profile,
     read_sounding_sidecar,
+    sidecar_sounding_profile,
 )
 from weatherbrief.tasks.route_weather import run_realtime_refresh
 from weatherbrief.models.live import (
@@ -3508,7 +3509,7 @@ def get_gramet(
     db: Session = Depends(get_db, scope="function"),
 ):
     """Get the GRAMET cross-section for a pack (PDF, with PNG fallback for old packs)."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     pdf_path = pack_dir / "gramet.pdf"
     if pdf_path.exists():
         return FileResponse(pdf_path, media_type="application/pdf")
@@ -3533,7 +3534,7 @@ def get_gramet_png(
     the file instead of re-rendering. Retention already deletes ``gramet.png``
     with the PDF. If it's already a PNG, serves it directly.
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
 
     # Prefer existing PNG
     png_path = pack_dir / "gramet.png"
@@ -3576,7 +3577,7 @@ def get_skewt(
 ):
     """Get a Skew-T image for a waypoint, generating on-demand if needed."""
     icao, model = _validate_icao(icao), _validate_model(model)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     skewt_path = pack_dir / "skewt" / f"{icao}_{model}.png"
     if skewt_path.exists():
         return FileResponse(skewt_path, media_type="image/png")
@@ -3641,7 +3642,7 @@ def get_hodograph(
 ):
     """Get a hodograph image for a waypoint, generating on-demand if needed."""
     icao, model = _validate_icao(icao), _validate_model(model)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     hodo_path = pack_dir / "skewt" / f"{icao}_{model}_hodo.png"
     if hodo_path.exists():
         return FileResponse(hodo_path, media_type="image/png")
@@ -3691,7 +3692,7 @@ def get_route_analyses(
     db: Session = Depends(get_db, scope="function"),
 ):
     """Get the route analyses JSON for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     ra_path = pack_dir / "route_analyses.json"
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
@@ -3716,7 +3717,7 @@ def get_alternates(
     were not computed (``compute_alternates`` off, or the destination forecast
     wasn't marginal enough to surface diverts).
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     snap_path = pack_dir / "briefing.json"
     if not snap_path.exists():
         snap_path = pack_dir / "snapshot.json"
@@ -3742,7 +3743,7 @@ def get_advisories(
     db: Session = Depends(get_db, scope="function"),
 ):
     """Get the route advisories JSON for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     adv_path = pack_dir / "route_advisories.json"
     if not adv_path.exists():
         raise HTTPException(status_code=404, detail="Route advisories not available")
@@ -3766,7 +3767,7 @@ def get_advisory_detail(
     the pure functions in ``connectors/views.py`` (one source of truth across
     web/iOS/MCP/ChatGPT).
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     adv_path = pack_dir / "route_advisories.json"
     if not adv_path.exists():
         raise HTTPException(status_code=404, detail="Route advisories not available")
@@ -3812,7 +3813,7 @@ def get_route_fronts(
     on (default off) — 404 otherwise. The data half of #195; visualization /
     advisory wiring is Part 2 (#196).
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     fronts_path = pack_dir / "route_fronts.json"
     if not fronts_path.exists():
         raise HTTPException(status_code=404, detail="Route fronts not available")
@@ -3827,7 +3828,7 @@ def get_alt_advisories(
     db: Session = Depends(get_db, scope="function"),
 ):
     """Get the alt-departure route advisories JSON for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     adv_path = pack_dir / "route_advisories_alt.json"
     if not adv_path.exists():
         raise HTTPException(status_code=404, detail="Alt advisories not available")
@@ -4669,7 +4670,7 @@ def get_altitude_table(
     sweep endpoint). No recompute — this is the cheap, cached path the lever
     indexes into.
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     path = pack_dir / "altitude_table.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Altitude table not available")
@@ -4734,7 +4735,7 @@ def get_elevation(
     db: Session = Depends(get_db, scope="function"),
 ):
     """Get the elevation profile JSON for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     path = pack_dir / "elevation_profile.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Elevation profile not available")
@@ -4857,7 +4858,7 @@ def get_route_skewt(
     Generates and caches the PNG on first request.
     """
     model = _validate_model(model)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
 
     # Cache path
     cache_dir = pack_dir / "skewt" / "route"
@@ -4945,15 +4946,20 @@ def get_sounding_profile(
     import json
 
     model = _validate_model(model)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
+
+    # Sidecar first: route_analyses.json and the ~17 MB cross_section.json are
+    # only needed to recompute on a sidecar miss. Parsing them on every call
+    # made a scrub burst (one request per route point) GIL-bound for seconds
+    # each, holding pooled DB connections until the pool ran out (11-26 06:17Z).
+    result = sidecar_sounding_profile(pack_dir, point_index, model)
+    if result is not None:
+        return result
 
     ra_path = pack_dir / "route_analyses.json"
     if not ra_path.exists():
         raise HTTPException(status_code=404, detail="Route analyses not available")
     ra_data = json.loads(ra_path.read_text())
-
-    # Cross-section is only needed for the on-the-fly fallback; when the sidecar
-    # is present we serve from it without recompute.
     cs_path = pack_dir / "cross_section.json"
     cs_data = json.loads(cs_path.read_text()) if cs_path.exists() else {}
 
@@ -4974,7 +4980,7 @@ def get_route_hodograph(
     Generates and caches the PNG on first request.
     """
     model = _validate_model(model)
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
 
     # Cache path
     cache_dir = pack_dir / "skewt" / "route"
@@ -5045,7 +5051,7 @@ def get_digest(
     db: Session = Depends(get_db, scope="function"),
 ):
     """Get the LLM digest markdown for a pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     digest_path = pack_dir / "digest.md"
     if not digest_path.exists():
         raise HTTPException(status_code=404, detail="Digest not available")
@@ -5060,7 +5066,7 @@ def get_digest_json(
     db: Session = Depends(get_db, scope="function"),
 ):
     """Get the structured LLM digest as JSON."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     json_path = pack_dir / "digest.json"
     if not json_path.exists():
         raise HTTPException(status_code=404, detail="Structured digest not available")
@@ -5081,7 +5087,7 @@ def get_digest_context(
     digest time (``tasks/outputs.py``); 404 for older packs that predate it
     or when the digest was not generated.
     """
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     ctx_path = pack_dir / "digest_context.txt"
     if not ctx_path.exists():
         raise HTTPException(status_code=404, detail="Digest context not available")
@@ -5151,7 +5157,7 @@ def get_dwd_chart_overlay(
     """
     from weatherbrief.fetch.dwd_charts import build_route_overlay
 
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
 
     waypoints = _pack_waypoints(pack_dir)
 
@@ -5241,7 +5247,7 @@ def get_metoffice_chart_overlay(
     if not _metoffice_charts_allowed(request, db):
         raise HTTPException(status_code=403, detail="Met Office charts not available")
 
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
 
     waypoints = _pack_waypoints(pack_dir)
 
@@ -5396,7 +5402,7 @@ def get_dwd_overview(
     db: Session = Depends(get_db, scope="function"),
 ):
     """Get the translated DWD synoptic overview for this pack."""
-    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=user_id)
+    pack_dir = _get_pack_dir_released(db, flight_id, timestamp, viewer_id=user_id)
     path = pack_dir / "dwd_overview.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="DWD overview not available")
@@ -5517,6 +5523,24 @@ def _load_pack_meta_or_404(db: Session, flight_id: str, timestamp: str) -> Brief
         return load_pack_meta(db, flight_id, timestamp)
     except KeyError:
         raise HTTPException(status_code=404, detail="Pack not found")
+
+
+def _get_pack_dir_released(
+    db: Session, flight_id: str, timestamp: str, *, viewer_id: str | None = None,
+) -> Path:
+    """:func:`_get_pack_dir`, then return the pooled DB connection.
+
+    For read-only GET handlers whose only DB use is this lookup and which then
+    read pack files from disk. ``get_db`` holds its connection until the handler
+    returns, so a slow file read (big JSON parse, PNG render) would otherwise
+    pin one of the pool's 15 connections for its whole duration — a burst of
+    such requests then starves every other endpoint (11-26 06:17Z incident).
+    ``get_db``'s own commit/close afterwards are no-ops on the closed session.
+    Don't use it in a handler that touches ``db`` or an ORM object afterwards.
+    """
+    pack_dir = _get_pack_dir(db, flight_id, timestamp, viewer_id=viewer_id)
+    db.close()
+    return pack_dir
 
 
 def _get_pack_dir(db: Session, flight_id: str, timestamp: str, *, viewer_id: str | None = None):
