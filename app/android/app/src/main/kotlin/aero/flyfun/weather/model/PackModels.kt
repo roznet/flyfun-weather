@@ -11,6 +11,12 @@ data class PackMetaResponse(
     val fetchTimestamp: String = "",
     @SerialName("days_out")
     val daysOut: Int = 0,
+    /**
+     * The flight's Flexibility mode now, injected by the server at serve time (not stored with
+     * the pack), so the timing-scenario panel follows a change made on another device. Null on
+     * older responses: fall back to the flight's own value (iOS `effectiveFlexibility`).
+     */
+    val flexibility: FlightFlexibility? = null,
     @SerialName("has_gramet")
     val hasGramet: Boolean = false,
     /** Why there is no GRAMET (#994); worded by `GrametStatusRules`. */

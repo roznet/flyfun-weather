@@ -76,7 +76,7 @@ class FixtureBriefingRepository : BriefingRepository // Used when isMockMode / F
 ```
 
 - **Concurrent pack loading**: `BriefingViewModel.loadInternal` and `loadPackContents` fetch all 9 pack sub-endpoints (`advisories`, `digest`, `snapshot`, `routeAnalyses`, `elevation`, `alternates`, `timeOptions`, `debrief`, `liveLayer`) in parallel using `coroutineScope { async { ... } }`.
-- **Bundle unpacking**: `CachingBriefingRepository.downloadPackBundle` streams `GET /api/flights/{id}/packs/{ts}/bundle`, unpacks the top-level JSON keys (`advisories`, `digest`, `snapshot`, `route_analyses`, `elevation`, `alternates`, `time_options`, and `sounding_profiles` → `sounding-{pointIndex}-{model}.json`), and marks the pack complete once all 5 required endpoints exist on disk.
+- **Bundle unpacking**: `CachingBriefingRepository.downloadPackBundle` streams `GET /api/flights/{id}/packs/{ts}/bundle`, unpacks the top-level JSON keys (`advisories`, `digest`, `snapshot`, `route_analyses`, `elevation`, `alternates`, and `sounding_profiles` → `sounding-{pointIndex}-{model}.json`), and marks the pack complete once all 5 required endpoints exist on disk.
 - **Chart cache**: `BriefingCache` stores surface charts and GRAMET images under `charts/<cacheKey>.<ext>` with mark-and-sweep (`pruneCharts`) and a 50 MB LRU cap.
 
 ## UI Tests & Mock Launch (#895)

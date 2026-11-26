@@ -197,7 +197,7 @@ surface exists on either client. This is the main open piece.
   pack meta carries it, and the client's flight object goes stale if Flexibility
   was edited after the briefing was opened.
 - Timing data is deliberately **excluded from the offline bundle** — it is
-  online-only on iOS.
+  online-only on iOS and Android (Android ported the iOS poll and panel in #893).
 - A **GRIB-primary** ECMWF / ICON slot (#912) has no Open-Meteo values outside
   its enrichment window: those hours are empty, not Open-Meteo-filled. The
   coverage rule already refuses them (baseline 0 levels, marked = GRIB hours),

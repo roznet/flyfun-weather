@@ -321,14 +321,13 @@ open class FixtureBriefingRepository(
     override fun refreshPack(flightId: String, force: Boolean, notifyEmail: Boolean): Flow<RefreshEvent> =
         flowOf(RefreshEvent(type = "complete", pack = FixtureBriefingData.pack))
 
-    override suspend fun timeOptions(flightId: String): TimeOptionsResponse =
-        TimeOptionsResponse(flightId = flightId)
+    // The fixtures carry no timing scan (iOS throws here too): a 404 hides the section.
+    override suspend fun timeOptions(flightId: String, timestamp: String): TimeOptionsResponse =
+        throw ApiError.NotFound
 
-    override suspend fun triggerTimeScan(flightId: String): TimeScanStatusDTO =
-        TimeScanStatusDTO(status = TimeScanJobStatus.READY)
+    override suspend fun rescanTimeOptions(flightId: String, timestamp: String) = Unit
 
-    override suspend fun confirmTimeOption(flightId: String, req: ConfirmTimeOptionRequest): FlightResponse =
-        moveFlight(flightId, MoveFlightRequest(departureTime = req.departureTime))
+    override suspend fun confirmTimeOption(flightId: String, timestamp: String, departureTime: String) = Unit
 
     override suspend fun observedStatus(): ObservedImageryStatusResponse =
         ObservedImageryStatusResponse()

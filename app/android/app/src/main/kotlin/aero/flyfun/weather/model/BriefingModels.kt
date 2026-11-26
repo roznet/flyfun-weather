@@ -1949,165 +1949,182 @@ data class RegAlternateTrigger(
 )
 
 // ============================================================================
-// Flexible Departure / Time Explorer
+// Flexible Departure / Timing Scenarios (#357, Android port #893)
 // ============================================================================
+//
+// Mirrors of the server `time_scan.py` DTO family, matching iOS `TimeOptionsResponse.swift`.
+// The scan is per briefing pack, not per flight: `GET /api/flights/{id}/packs/{ts}/time-options`
+// returns `{ "status": TimeScanStatus|null, "scan": TimeWindowScan|null }`. Datetimes stay ISO
+// strings. Every field has a default so a missing key degrades that field (WbJson coerces
+// unknown enum values to the default) instead of failing the whole poll.
 
+/** Job lifecycle. `PENDING`/`RUNNING` are non-terminal (keep polling); the rest are terminal. */
 @Serializable
-enum class TimeScanJobStatus(val wireValue: String) {
+enum class TimeScanJobStatus {
     @SerialName("pending")
-    PENDING("pending"),
+    PENDING,
 
     @SerialName("running")
-    RUNNING("running"),
+    RUNNING,
 
-    @SerialName("ready")
-    READY("ready"),
+    @SerialName("done")
+    DONE,
 
     @SerialName("failed")
-    FAILED("failed"),
+    FAILED,
+
+    @SerialName("skipped")
+    SKIPPED,
 }
 
+/**
+ * Small polling-status sidecar. `SKIPPED` carries a machine [reason] (`no_alternate_time`,
+ * `flexibility_none`, ...). An unknown status decodes to the terminal [TimeScanJobStatus.DONE]
+ * so schema drift never spins the poll forever (same as iOS).
+ */
 @Serializable
 data class TimeScanStatusDTO(
-    val status: TimeScanJobStatus = TimeScanJobStatus.PENDING,
-    @SerialName("scanned_at")
-    val scannedAt: String? = null,
-    @SerialName("candidate_count")
-    val candidateCount: Int = 0,
-    @SerialName("best_departure_time")
-    val bestDepartureTime: String? = null,
-    @SerialName("best_assessment")
-    val bestAssessment: String? = null,
-    @SerialName("best_red_count")
-    val bestRedCount: Int? = null,
-    @SerialName("best_amber_count")
-    val bestAmberCount: Int? = null,
-    @SerialName("current_assessment")
-    val currentAssessment: String? = null,
-    @SerialName("current_red_count")
-    val currentRedCount: Int? = null,
-    @SerialName("current_amber_count")
-    val currentAmberCount: Int? = null,
-    val summary: String? = null,
-    val error: String? = null,
+    val status: TimeScanJobStatus = TimeScanJobStatus.DONE,
+    val flexibility: FlightFlexibility = FlightFlexibility.NONE,
+    val reason: String = "",
+    @SerialName("updated_at")
+    val updatedAt: String = "",
 )
 
-@Serializable
-enum class TimeConfidence(val wireValue: String) {
-    @SerialName("low")
-    LOW("low"),
-
-    @SerialName("medium")
-    MEDIUM("medium"),
-
-    @SerialName("high")
-    HIGH("high"),
-}
-
+/** Result of a multi-model check of one candidate (on-tap confirm, or in-window at scan time). */
 @Serializable
 data class TimeConfirmationDTO(
-    val show: Boolean = false,
-    @SerialName("days_out")
-    val daysOut: Int = 0,
-    val confidence: TimeConfidence = TimeConfidence.LOW,
-    val headline: String = "",
-    val detail: String = "",
-    @SerialName("recommended_departure_time")
-    val recommendedDepartureTime: String? = null,
-    @SerialName("recommended_is_current")
-    val recommendedIsCurrent: Boolean = false,
+    @SerialName("models_checked")
+    val modelsChecked: List<String> = emptyList(),
+    val assessment: String = "",
+    @SerialName("assessment_reason")
+    val assessmentReason: String = "",
+    @SerialName("per_model_reasons")
+    val perModelReasons: Map<String, String> = emptyMap(),
+    @SerialName("better_than_baseline")
+    val betterThanBaseline: Boolean = false,
+    val improves: List<String> = emptyList(),
+    val worsens: List<String> = emptyList(),
+    @SerialName("confirmed_at")
+    val confirmedAt: String = "",
 )
 
+/**
+ * Per-candidate model-coverage label: `CONFIRMED_IN_WINDOW` (every model's window covers it),
+ * `ECMWF_ONLY` (provisional, offers "Check all models"), `CONFIRMED` (user-tapped check).
+ */
+@Serializable
+enum class TimeConfidence {
+    @SerialName("confirmed_in_window")
+    CONFIRMED_IN_WINDOW,
+
+    @SerialName("ecmwf_only")
+    ECMWF_ONLY,
+
+    @SerialName("confirmed")
+    CONFIRMED,
+}
+
+/** One graded departure time. */
 @Serializable
 data class TimeCandidate(
     @SerialName("departure_time")
     val departureTime: String = "",
-    @SerialName("target_date")
-    val targetDate: String = "",
-    @SerialName("target_hour_utc")
-    val targetHourUtc: Int = 0,
-    @SerialName("is_current")
-    val isCurrent: Boolean = false,
-    val rank: Int = 0,
-    val score: Double = 0.0,
-    val assessment: String = "unavailable",
-    @SerialName("advisory_summary")
-    val advisorySummary: AdvisorySummary = AdvisorySummary(),
-    val advisories: List<RouteAdvisoryResult> = emptyList(),
-    @SerialName("models_available")
-    val modelsAvailable: List<String> = emptyList(),
-    @SerialName("models_missing")
-    val modelsMissing: List<String> = emptyList(),
-    @SerialName("pros_vs_current")
-    val prosVsCurrent: List<String> = emptyList(),
-    @SerialName("cons_vs_current")
-    val consVsCurrent: List<String> = emptyList(),
-    val note: String? = null,
-    @SerialName("airport_conditions")
-    val airportConditions: AirportConditions? = null,
+    @SerialName("departure_shift_hours")
+    val departureShiftHours: Double = 0.0,
+    /** Per-route-point ETAs the grade read (audit trail). */
+    @SerialName("valid_times")
+    val validTimes: List<String> = emptyList(),
+    val assessment: String = "",
+    @SerialName("assessment_reason")
+    val assessmentReason: String = "",
+    @SerialName("models_used")
+    val modelsUsed: List<String> = emptyList(),
+    val improves: List<String> = emptyList(),
+    val worsens: List<String> = emptyList(),
+    val margin: Double = 0.0,
+    val confidence: TimeConfidence = TimeConfidence.ECMWF_ONLY,
+    @SerialName("is_baseline")
+    val isBaseline: Boolean = false,
+    @SerialName("is_alternate")
+    val isAlternate: Boolean = false,
+    val confirmed: TimeConfirmationDTO? = null,
+    /** True while an on-tap confirm is queued or running for this candidate. */
+    @SerialName("confirm_pending")
+    val confirmPending: Boolean = false,
 ) {
+    /** Departure time is unique within a scan. */
     val id: String
         get() = departureTime
 
-    val resolvedAssessment: Assessment
-        get() = Assessment.fromString(assessment)
+    /** Once confirmed, the multi-model grade replaces the provisional one. */
+    val effectiveAssessment: Assessment
+        get() = Assessment.fromString(confirmed?.assessment ?: assessment)
 }
 
-typealias TimeCandidateDTO = TimeCandidate
-
+/** The searched departure window and what clipped it. */
 @Serializable
 data class TimeWindowDTO(
-    val mode: FlexibilityMode = FlexibilityMode.FIXED,
-    val days: Int = 1,
-    @SerialName("from_utc")
-    val fromUtc: Int = 6,
-    @SerialName("to_utc")
-    val toUtc: Int = 18,
-    @SerialName("step_hours")
-    val stepHours: Int = 3,
+    val start: String = "",
+    val end: String = "",
+    @SerialName("daylight_clipped")
+    val daylightClipped: Boolean = false,
+    @SerialName("horizon_clipped")
+    val horizonClipped: Boolean = false,
+    /** Previous-day mode where part of the daylight window has already elapsed. */
+    @SerialName("past_clipped")
+    val pastClipped: Boolean = false,
 )
 
+/** The planned departure graded through the same path as the candidates. */
 @Serializable
 data class TimeBaselineDTO(
     @SerialName("departure_time")
     val departureTime: String = "",
-    val assessment: String = "unavailable",
-    @SerialName("red_count")
-    val redCount: Int = 0,
-    @SerialName("amber_count")
-    val amberCount: Int = 0,
-    @SerialName("green_count")
-    val greenCount: Int = 0,
-    val score: Double = 0.0,
+    val assessment: String = "",
+    @SerialName("assessment_reason")
+    val assessmentReason: String = "",
 )
 
+/** The `time_options.json` artifact: everything the scenario panel renders. */
 @Serializable
 data class TimeWindowScanDTO(
-    val window: TimeWindowDTO = TimeWindowDTO(),
-    val baseline: TimeBaselineDTO? = null,
-    @SerialName("recommended_departure_time")
-    val recommendedDepartureTime: String? = null,
-    val summary: String = "",
+    val flexibility: FlightFlexibility = FlightFlexibility.NONE,
+    val baseline: TimeBaselineDTO = TimeBaselineDTO(),
+    /** Null for pure "alternate" mode. */
+    val window: TimeWindowDTO? = null,
     val candidates: List<TimeCandidate> = emptyList(),
+    /** Daylight hours refused because some model's coverage didn't span them. */
+    @SerialName("refused_times")
+    val refusedTimes: List<String> = emptyList(),
+    @SerialName("generated_at")
+    val generatedAt: String = "",
 )
 
+/** Poll shape of `GET .../packs/{ts}/time-options`. */
 @Serializable
 data class TimeOptionsResponse(
-    @SerialName("flight_id")
-    val flightId: String = "",
-    val status: TimeScanStatusDTO = TimeScanStatusDTO(),
-    val confirmation: TimeConfirmationDTO = TimeConfirmationDTO(),
+    val status: TimeScanStatusDTO? = null,
     val scan: TimeWindowScanDTO? = null,
-)
+) {
+    /** Keep polling: the scan is pending/running, a confirm is in flight, or nothing exists yet. */
+    val isNonTerminal: Boolean
+        get() {
+            val s = status?.status
+            return s == TimeScanJobStatus.PENDING || s == TimeScanJobStatus.RUNNING ||
+                anyConfirmPending || (status == null && scan == null)
+        }
 
+    /** The server allows one confirm at a time per pack, so the panel disables every check meanwhile. */
+    val anyConfirmPending: Boolean
+        get() = scan?.candidates?.any { it.confirmPending } == true
+}
+
+/** Body of `POST .../time-options/confirm`: identifies the candidate by its departure time. */
 @Serializable
 data class ConfirmTimeOptionRequest(
     @SerialName("departure_time")
     val departureTime: String,
-    @SerialName("lock_to_fixed")
-    val lockToFixed: Boolean = true,
-    @SerialName("refresh_now")
-    val refreshNow: Boolean = true,
 )
 
 // ============================================================================

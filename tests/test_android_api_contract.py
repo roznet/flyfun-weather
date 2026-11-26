@@ -28,6 +28,7 @@ from weatherbrief.api import debriefs as debriefs_api
 from weatherbrief.api import devices as devices_api
 from weatherbrief.api import feedback as feedback_api
 from weatherbrief.api import flights as flights_api
+from weatherbrief.api import packs as packs_api
 from weatherbrief.api import trips as trips_api
 from weatherbrief.api.app import create_app
 
@@ -49,14 +50,9 @@ VERBS = {
 }
 
 # Calls whose path or verb the server does not route. #889 fixed the rest, #907 the observed
-# cells/flashes calls and #998 the radar/satellite frames (`/api/observed/frames/{source}`);
-# flexible departure needs design work rather than a path fix.
-KNOWN_BROKEN_CALLS = {
-    # Flexible departure: per flight on Android, per pack on the server (a port of the iOS flow).
-    ("GET", "/api/flights/{}/time-options"),
-    ("POST", "/api/flights/{}/time-options/confirm"),
-    ("POST", "/api/flights/{}/time-options/scan"),
-}
+# cells/flashes calls, #998 the radar/satellite frames (`/api/observed/frames/{source}`) and
+# #893 flexible departure (now per pack, like iOS).
+KNOWN_BROKEN_CALLS: set[tuple[str, str]] = set()
 
 # Kotlin request class → server model. The keys Android encodes must all be server fields.
 REQUEST_DTOS = {
@@ -77,6 +73,7 @@ REQUEST_DTOS = {
     "DebriefRequest": debriefs_api.DebriefRequest,
     "DebriefAnswersRequest": debriefs_api.AnswersRequest,
     "DebriefAnswerItem": debriefs_api.AnswerItem,
+    "ConfirmTimeOptionRequest": packs_api.TimeConfirmRequest,
 }
 
 # Request keys the server ignores. Add nothing here: fix the client.
