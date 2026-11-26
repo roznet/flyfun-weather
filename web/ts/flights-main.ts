@@ -10,7 +10,8 @@ import {
   type AutorouterRouteSummary,
   type WaypointInfo,
 } from './adapters/api-adapter';
-import type { FlightResponse } from './store/types';
+import type { ArchiveFacets, ArchiveRow, FlightResponse } from './store/types';
+import type { PastFilterState } from './helpers/past-archive';
 import { aircraftLabel, fetchAircraft, type AircraftResponse } from './adapters/aircraft-adapter';
 import { interpretAndConfirmRoute, previewRoute } from './components/route-interpret';
 import { confirmZeroDuration } from './components/duration-confirm';
@@ -767,15 +768,20 @@ async function init(): Promise<void> {
   };
 
   // Flights-list filters (#542). Two section-scoped queries: upcoming filters
-  // future + recent in the browser, past round-trips to the server.
+  // future + recent in the browser, past (search + chips, #1032) round-trips
+  // to the archive endpoint, which also counts the chips.
   const filterHandlers = (state: {
-    upcomingQuery: string; pastQuery: string; pastFiltering: boolean;
+    upcomingQuery: string; pastFilter: PastFilterState; pastFiltering: boolean;
+    pastRows: ArchiveRow[]; pastFacets: ArchiveFacets | null;
   }) => ({
     upcomingQuery: state.upcomingQuery,
-    pastQuery: state.pastQuery,
+    pastFilter: state.pastFilter,
     pastFiltering: state.pastFiltering,
+    pastRows: state.pastRows,
+    pastFacets: state.pastFacets,
     onUpcomingQuery: (q: string) => store.getState().setUpcomingQuery(q),
     onPastQuery: (q: string) => void store.getState().setPastQuery(q),
+    onPastFilter: (patch: Partial<PastFilterState>) => void store.getState().setPastFilter(patch),
   });
   ui.wireUpcomingFilter((q) => store.getState().setUpcomingQuery(q));
 
@@ -788,7 +794,9 @@ async function init(): Promise<void> {
       state.debriefStats !== prev.debriefStats ||
       state.loaded !== prev.loaded ||
       state.upcomingQuery !== prev.upcomingQuery ||
-      state.pastQuery !== prev.pastQuery ||
+      state.pastFilter !== prev.pastFilter ||
+      state.pastRows !== prev.pastRows ||
+      state.pastFacets !== prev.pastFacets ||
       state.pastFiltering !== prev.pastFiltering ||
       state.trips !== prev.trips
     ) {

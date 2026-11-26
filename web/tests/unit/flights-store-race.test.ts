@@ -1,20 +1,23 @@
-/** Out-of-order response guard for the flights list (#542, PR #547 review).
+/** Out-of-order response guard for the past list (#542, PR #547 review;
+ *  archive since #1032).
  *
- *  `loadFlights`, `loadMorePast` and `setPastQuery` all replace the same list
- *  and race against *each other*, not just against themselves. A "show more"
- *  page or a background reload that resolves after a filter change must not
- *  repaint the list with results for the previous query — that state is
- *  silently wrong (rows don't match the filter box) and self-persists until
- *  the next fetch.
+ *  `loadPast`, `loadMorePast`, `setPastQuery` and `setPastFilter` all replace
+ *  the same past rows and race against *each other*. A "show more" page or a
+ *  background reload that resolves after a filter change must not repaint the
+ *  list with results for the previous filter — that state is silently wrong
+ *  (rows don't match the chips) and self-persists until the next fetch.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { FlightsPage } from '../../ts/adapters/api-adapter';
+import type { ArchiveListResponse } from '../../ts/store/types';
+import { EMPTY_PAST_FILTER } from '../../ts/helpers/past-archive';
 
-const fetchFlights = vi.fn();
+const fetchArchive = vi.fn();
+const fetchFlights = vi.fn(async () => ({ flights: [], pastTotal: 0 }));
 
 vi.mock('../../ts/adapters/api-adapter', () => ({
-  fetchFlights: (...args: unknown[]) => fetchFlights(...args),
+  fetchFlights: (...args: unknown[]) => fetchFlights(...(args as [])),
+  fetchArchive: (...args: unknown[]) => fetchArchive(...args),
   fetchActiveRefreshes: vi.fn(async () => []),
   createFlight: vi.fn(),
   deleteFlight: vi.fn(),
@@ -28,9 +31,9 @@ vi.mock('../../ts/adapters/debrief-adapter', () => ({
 
 const { flightsStore, PAST_PAGE_SIZE } = await import('../../ts/store/flights-store');
 
-/** Minimal flight row — only the fields the store itself reads. */
-function flight(id: string, section: 'future' | 'recent' | 'past' = 'past') {
-  return { id, section, waypoints: [id.toUpperCase()], route_name: id } as never;
+/** Minimal archive row — only the fields the store itself reads. */
+function row(id: string) {
+  return { id } as never;
 }
 
 /** A promise plus its resolver, so a test can land responses out of order. */
@@ -40,79 +43,86 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function page(flights: unknown[], pastTotal = flights.length): FlightsPage {
-  return { flights, pastTotal } as FlightsPage;
+function page(rows: unknown[], total = rows.length): ArchiveListResponse {
+  return { view: 'list', rows, total, limit: 20, offset: 0, facets: { source: 'forecast', tags: {}, outcomes: {}, not_recorded: 0 } } as ArchiveListResponse;
 }
 
 beforeEach(() => {
-  fetchFlights.mockReset();
+  fetchArchive.mockReset();
+  fetchFlights.mockClear();
   flightsStore.setState({
-    flights: [], pastTotal: 0, loading: false, loaded: false,
-    loadingMore: false, error: null, upcomingQuery: '', pastQuery: '',
+    flights: [], pastRows: [], pastTotal: 0, loading: false, loaded: false,
+    loadingMore: false, error: null, upcomingQuery: '', pastFilter: EMPTY_PAST_FILTER,
   });
 });
 
 describe('flights store: out-of-order guard', () => {
   it('drops a "show more" page that lands after a filter change', async () => {
-    flightsStore.setState({ flights: [flight('old-a'), flight('old-b')], pastTotal: 20 });
+    flightsStore.setState({ pastRows: [row('old-a'), row('old-b')], pastTotal: 20 });
 
-    const showMore = deferred<FlightsPage>();
-    const filter = deferred<FlightsPage>();
-    fetchFlights.mockReturnValueOnce(showMore.promise).mockReturnValueOnce(filter.promise);
+    const showMore = deferred<ArchiveListResponse>();
+    const filter = deferred<ArchiveListResponse>();
+    fetchArchive.mockReturnValueOnce(showMore.promise).mockReturnValueOnce(filter.promise);
 
     const more = flightsStore.getState().loadMorePast();
     const filtered = flightsStore.getState().setPastQuery('LESB');
 
     // The filter result lands first, then the stale page it superseded.
-    filter.resolve(page([flight('lesb-1')], 1));
+    filter.resolve(page([row('lesb-1')], 1));
     await filtered;
-    showMore.resolve(page([flight('old-c')], 20));
+    showMore.resolve(page([row('old-c')], 20));
     await more;
 
     const state = flightsStore.getState();
-    expect(state.flights.map((f) => f.id)).toEqual(['lesb-1']);
+    expect(state.pastRows.map((r) => r.id)).toEqual(['lesb-1']);
     expect(state.pastTotal).toBe(1);
     // The superseded path must still clear its own spinner.
     expect(state.loadingMore).toBe(false);
   });
 
-  it('drops a background reload that lands after a filter change', async () => {
-    const reload = deferred<FlightsPage>();
-    const filter = deferred<FlightsPage>();
-    fetchFlights.mockReturnValueOnce(reload.promise).mockReturnValueOnce(filter.promise);
+  it('drops a background reload that lands after a chip change', async () => {
+    const reload = deferred<ArchiveListResponse>();
+    const filter = deferred<ArchiveListResponse>();
+    fetchArchive.mockReturnValueOnce(reload.promise).mockReturnValueOnce(filter.promise);
 
     const reloading = flightsStore.getState().loadFlights();
-    const filtered = flightsStore.getState().setPastQuery('LESB');
+    const filtered = flightsStore.getState().setPastFilter({ tags: ['ICE'] });
 
-    filter.resolve(page([flight('lesb-1')], 1));
+    filter.resolve(page([row('ice-1')], 1));
     await filtered;
-    reload.resolve(page([flight('everything')], 42));
+    reload.resolve(page([row('everything')], 42));
     await reloading;
 
     const state = flightsStore.getState();
-    expect(state.flights.map((f) => f.id)).toEqual(['lesb-1']);
+    expect(state.pastRows.map((r) => r.id)).toEqual(['ice-1']);
     expect(state.pastTotal).toBe(1);
     expect(state.loading).toBe(false);
+    // /api/flights no longer carries the past section.
+    expect(fetchFlights).toHaveBeenCalledWith({ pastLimit: 0 });
   });
 
   it('still applies the newest request when it lands last', async () => {
-    // The guard must not reject legitimate updates — only superseded ones.
-    fetchFlights.mockResolvedValueOnce(page([flight('lesb-1')], 1));
+    fetchArchive.mockResolvedValueOnce(page([row('lesb-1')], 1));
     await flightsStore.getState().setPastQuery('LESB');
 
-    expect(flightsStore.getState().flights.map((f) => f.id)).toEqual(['lesb-1']);
-    expect(flightsStore.getState().pastQuery).toBe('LESB');
+    expect(flightsStore.getState().pastRows.map((r) => r.id)).toEqual(['lesb-1']);
+    expect(flightsStore.getState().pastFilter.q).toBe('LESB');
   });
 
-  it('sends the active past query with a "show more" page', async () => {
-    flightsStore.setState({ pastQuery: 'LESB', flights: [flight('lesb-1')] });
-    fetchFlights.mockResolvedValueOnce(page([flight('lesb-2')], 2));
+  it('sends the active past filter with a "show more" page', async () => {
+    flightsStore.setState({
+      pastFilter: { ...EMPTY_PAST_FILTER, q: 'LESB', tags: ['TS'] }, pastRows: [row('lesb-1')],
+    });
+    fetchArchive.mockResolvedValueOnce(page([row('lesb-2')], 2));
 
     await flightsStore.getState().loadMorePast();
 
-    expect(fetchFlights).toHaveBeenCalledWith(
-      expect.objectContaining({ pastQuery: 'LESB', pastOffset: 1, pastLimit: PAST_PAGE_SIZE }),
-    );
+    const params = fetchArchive.mock.calls[0][0] as URLSearchParams;
+    expect(params.get('q')).toBe('LESB');
+    expect(params.get('tags')).toBe('TS');
+    expect(params.get('offset')).toBe('1');
+    expect(params.get('limit')).toBe(String(PAST_PAGE_SIZE));
+    expect(flightsStore.getState().pastRows.map((r) => r.id)).toEqual(['lesb-1', 'lesb-2']);
   });
 });
 

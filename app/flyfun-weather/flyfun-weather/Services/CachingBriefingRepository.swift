@@ -400,6 +400,10 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
         try await online.frequentAirports()
     }
 
+    func pastArchive(_ query: [URLQueryItem]) async throws -> PastArchiveResponse {
+        try await online.pastArchive(query)
+    }
+
     // Historical map (#629) — online-only. A final past instant is sent with
     // `Cache-Control: immutable` and the VM keeps its own small LRU.
     func historicalMap(at: Date, lead: Int) async throws -> HistoricalMapResponse {

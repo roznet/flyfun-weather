@@ -87,9 +87,27 @@ struct FlightListView: View {
     // deep-link to a just-created flight (push tap / Universal Link) isn't dropped
     // against a stale cache-first list. Holds the flight id we've already retried.
     @State private var reloadRetryFlightId: String?
-    /// "Past" flights start collapsed (like the web app) so the list opens on
-    /// what's upcoming/recent.
-    @State private var pastExpanded = false
+    /// The Past flights screen (#1032) pushed from "See all" or an iPad saved
+    /// filter, with the filter it opens on. nil when not shown.
+    @State private var pastScreen: PastFilter?
+    /// A Past row whose flight could not be opened (fetch by id failed).
+    @State private var pastOpenError: String?
+
+    /// Past flights shown in the main list before "See all".
+    static let pastTeaserCount = 3
+    /// iPad sidebar saved filters (#1030).
+    struct PastSavedFilter: Hashable {
+        let label: String
+        let icon: String
+        let filter: PastFilter
+    }
+    static let pastSavedFilters: [PastSavedFilter] = [
+        PastSavedFilter(label: "All past", icon: "clock.arrow.circlepath", filter: .all),
+        PastSavedFilter(label: "With icing", icon: "snowflake", filter: .withIcing),
+        PastSavedFilter(label: "With convection", icon: "cloud.bolt", filter: .withConvection),
+        PastSavedFilter(label: "Cancelled", icon: "xmark.circle", filter: .cancelled),
+        PastSavedFilter(label: "Debriefed", icon: "checkmark.bubble", filter: .debriefed),
+    ]
 
     // Contextual tips (#312): the add-flight / forecast-map pair reads side by
     // side, so the forecast-map tip is sequenced after the add-flight tip
@@ -125,32 +143,36 @@ struct FlightListView: View {
                                 let rowsByTitle = Self.groupedRows(groups, trips: viewModel.trips)
                                 ForEach(groups, id: \.title) { group in
                                     if group.title == "Past" {
+                                        // Past (#1032): a short teaser here, the
+                                        // full searchable list on its own screen
+                                        // (server-filtered archive). Stays flat:
+                                        // members keep their trip badge.
                                         Section {
-                                            if pastExpanded {
-                                                // Past stays flat: it is server-
-                                                // paginated, so a leg pulled under
-                                                // a trip header could vanish or
-                                                // duplicate depending on the page
-                                                // loaded. Members keep their badge.
-                                                ForEach(group.flights) { flight in
-                                                    flightRow(flight, viewModel: viewModel)
+                                            ForEach(group.flights.prefix(Self.pastTeaserCount)) { flight in
+                                                flightRow(flight, viewModel: viewModel)
+                                            }
+                                            if !isCompact {
+                                                // iPad sidebar: saved filters open
+                                                // the Past screen pre-filtered.
+                                                ForEach(Self.pastSavedFilters, id: \.label) { saved in
+                                                    Button {
+                                                        pastScreen = saved.filter
+                                                    } label: {
+                                                        Label(saved.label, systemImage: saved.icon)
+                                                    }
+                                                    .accessibilityIdentifier("pastSaved-\(saved.label)")
                                                 }
                                             }
                                         } header: {
-                                            Button {
-                                                withAnimation { pastExpanded.toggle() }
-                                            } label: {
-                                                HStack {
-                                                    Text("Past")
-                                                    Spacer()
-                                                    Text("\(group.flights.count)")
-                                                        .foregroundStyle(.secondary)
-                                                    Image(systemName: pastExpanded ? "chevron.down" : "chevron.right")
-                                                        .foregroundStyle(.secondary)
-                                                }
-                                                .contentShape(Rectangle())
+                                            HStack {
+                                                Text("Past")
+                                                Text("\(group.flights.count)")
+                                                    .foregroundStyle(.secondary)
+                                                Spacer()
+                                                Button("See all") { pastScreen = .all }
+                                                    .font(.subheadline)
+                                                    .accessibilityIdentifier("pastSeeAll")
                                             }
-                                            .buttonStyle(.plain)
                                         }
                                     } else if let rows = rowsByTitle[group.title], !rows.isEmpty {
                                         // Empty when every flight in it was drawn
@@ -167,6 +189,13 @@ struct FlightListView: View {
                                 await viewModel.loadFlights()
                             }
                             .accessibilityIdentifier("flightList")
+                            .navigationDestination(item: $pastScreen) { filter in
+                                if let repo = appState.repository {
+                                    PastFlightsView(repository: repo, filter: filter) { id in
+                                        openPastFlight(id, viewModel: viewModel)
+                                    }
+                                }
+                            }
                             }
                         }
                     }
@@ -474,6 +503,14 @@ struct FlightListView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(shareResolveError ?? "")
+        }
+        .alert("Flight unavailable", isPresented: Binding(
+            get: { pastOpenError != nil },
+            set: { if !$0 { pastOpenError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(pastOpenError ?? "")
         }
         .alert("Couldn’t unsubscribe", isPresented: Binding(
             get: { unsubscribeError != nil },
@@ -938,8 +975,27 @@ struct FlightListView: View {
         }
     }
 
+    /// Open a Past-screen row's briefing: the same selection a list tap makes.
+    /// iOS loads every owned flight (no `past_limit`), so the row is normally
+    /// in the list; otherwise it is fetched by id.
+    private func openPastFlight(_ id: String, viewModel: FlightListViewModel) {
+        if case .loaded(let flights) = viewModel.state,
+           let flight = flights.first(where: { $0.id == id }) {
+            selection = .flight(flight)
+            return
+        }
+        guard let repo = appState.repository else { return }
+        Task {
+            do {
+                selection = .flight(try await repo.flight(id: id))
+            } catch {
+                pastOpenError = error.localizedDescription
+            }
+        }
+    }
+
     /// One flight row (navigation + edit swipe/context menu). Shared by every
-    /// section so the collapsible Past section renders identical rows.
+    /// section so the Past teaser renders identical rows.
     @ViewBuilder
     private func flightRow(_ flight: FlightResponse, viewModel: FlightListViewModel) -> some View {
         let hasCached = viewModel.cachedFlightIds.contains(flight.id)

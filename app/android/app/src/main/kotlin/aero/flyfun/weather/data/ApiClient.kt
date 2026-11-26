@@ -628,6 +628,10 @@ class ApiClient(
         delete("/api/flights/${encodePathSegment(flightId)}/debrief")
 
     /** The post-flight report (#1023), built by the server on each call. */
+    /** Past flights finder (#1031): filtered, paged, counted by the server. */
+    suspend fun getPastArchive(query: List<Pair<String, String>>): PastArchiveResponse =
+        get("/api/flights/archive", query)
+
     suspend fun getDebriefReport(flightId: String): DebriefReport =
         get("/api/flights/${encodePathSegment(flightId)}/debrief/report")
 
