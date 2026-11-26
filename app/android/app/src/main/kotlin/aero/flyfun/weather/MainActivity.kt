@@ -38,6 +38,7 @@ import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import aero.flyfun.weather.data.AutoDownloadGate
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FlightResponse
 import aero.flyfun.weather.model.NavigationTarget
@@ -259,6 +260,7 @@ fun FlyFunWeatherRoot(
         )
     }
 
+    val appContext = LocalContext.current.applicationContext
     val selectedBriefingVm: BriefingViewModel? = activeFlightId?.let { fId ->
         viewModel(viewModelStoreOwner = checkNotNull(briefingOwner), key = "briefing") {
             BriefingViewModel(
@@ -266,6 +268,7 @@ fun FlyFunWeatherRoot(
                 repository = appState.repository,
                 initialFlight = resolvedFlightForBriefing,
                 helpStore = appState.helpStore,
+                autoDownloadAllowed = { AutoDownloadGate.allowed(appContext) },
             )
         }
     }

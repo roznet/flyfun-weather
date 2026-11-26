@@ -36,6 +36,8 @@ class BriefingViewModel(
         ?: ((repository as? CachingBriefingRepository)?.online as? OnlineBriefingRepository)?.api,
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
     private val scopeOverride: CoroutineScope? = null,
+    /** Connectivity gate for auto-downloading the latest pack ([AutoDownloadGate]); off by default. */
+    private val autoDownloadAllowed: () -> Boolean = { false },
 ) : ViewModel() {
 
     private val scope: CoroutineScope = scopeOverride ?: viewModelScope
@@ -255,6 +257,7 @@ class BriefingViewModel(
 
             if (targetPack != null) {
                 loadPackContents(flightId, targetPack, openObserved = openObserved)
+                if (targetPack.fetchTimestamp == latest?.fetchTimestamp) maybeAutoDownloadLatest()
                 // A refresh started elsewhere (web, another device) is still running:
                 // show its progress and load the new pack when it lands (iOS `checkActiveRefresh`).
                 // Checked off the load path so the shown pack never waits on it.
@@ -634,6 +637,7 @@ class BriefingViewModel(
         }
         loadPackContents(flightId, newPack, openObserved = false)
         _errorMessage.value = null
+        maybeAutoDownloadLatest()
     }
 
     /** The server's refresh state for this flight when one is running, else null (also on failure). */
@@ -701,7 +705,22 @@ class BriefingViewModel(
         }
     }
 
-    fun downloadCurrentPack() {
+    /**
+     * Download the shown (latest) pack's offline bundle — one gzip, ~0.1–0.7 MB — as soon as it is
+     * displayed, so Skew-Ts and the rest read from disk. Mirrors iOS `maybeAutoDownloadLatest`:
+     * skipped when already cached or downloading, for past flights (they age out), and when
+     * [autoDownloadAllowed] says no (offline / Data Saver). Failures stay silent; the manual
+     * download button still reports them.
+     */
+    private fun maybeAutoDownloadLatest() {
+        if (_isOfflineCached.value || _isDownloadingPack.value) return
+        if (repository !is CachingBriefingRepository) return
+        if (!isTodayOrFuture(_flight.value?.targetDate)) return
+        if (!autoDownloadAllowed()) return
+        downloadCurrentPack(quiet = true)
+    }
+
+    fun downloadCurrentPack(quiet: Boolean = false) {
         val flightId = currentFlightId ?: _flight.value?.id ?: return
         val pack = _selectedPack.value ?: return
         scope.launch {
@@ -720,8 +739,10 @@ class BriefingViewModel(
                     )
                 }
                 _isOfflineCached.value = true
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
-                _errorMessage.value = e.message ?: "Failed to download pack for offline use"
+                if (!quiet) _errorMessage.value = e.message ?: "Failed to download pack for offline use"
             } finally {
                 _isDownloadingPack.value = false
             }
@@ -951,6 +972,13 @@ class BriefingViewModel(
     }
 
     companion object {
+        /** Whether a flight's target date (YYYY-MM-DD) is today or later; blank/unparsable → true. */
+        internal fun isTodayOrFuture(targetDate: String?, today: java.time.LocalDate = java.time.LocalDate.now()): Boolean {
+            if (targetDate.isNullOrBlank()) return true
+            val date = runCatching { java.time.LocalDate.parse(targetDate.take(10)) }.getOrNull() ?: return true
+            return !date.isBefore(today)
+        }
+
         const val ACTIVE_REFRESH_POLL_MS = 3_000L
         const val ACTIVE_REFRESH_MAX_POLLS = 100
 
