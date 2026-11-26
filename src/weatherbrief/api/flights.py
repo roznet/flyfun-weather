@@ -1944,9 +1944,9 @@ def get_flight_archive(
     from weatherbrief.storage.flight_facts import ARCHIVE_TAGS
 
     try:
-        tag_list = parse_csv(tags, ARCHIVE_TAGS, "tags")
-        outcome_list = parse_csv(outcome, OUTCOMES, "outcome")
-        hide_list = parse_csv(hide, OUTCOMES, "hide")
+        tag_list = parse_csv(tags, ARCHIVE_TAGS, "tags", upper=True)
+        outcome_list = parse_csv(outcome, OUTCOMES, "outcome", upper=False)
+        hide_list = parse_csv(hide, OUTCOMES, "hide", upper=False)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     if date_from and date_to and date_from > date_to:

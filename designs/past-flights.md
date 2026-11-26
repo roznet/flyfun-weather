@@ -19,7 +19,7 @@ touches, so "had red icing" survives the packs.
 | departure / destination ICAO, lat/lon, `route_line_json`, `distance_nm` | newest readable pack's `briefing.json` route; else `resolve_waypoints` with `AIRPORTS_DB`; else the codes only |
 | `forecast_tags_json`, `forecast_pack_ts`, `tags_recorded` | the pack `default_forecast_pack` (`tasks/live_recap.py`) picks, as the debrief report picks it (effective departure, planned when cancelled) |
 | `forecast_frozen_at` | set at window close, by retention before T2, by the backfill, or on any refresh once the flight ended > 24 h ago; never before the departure |
-| `reported_tags_json` | cancel reasons (cancelled only) + answers: icing light or worse → ICE, turbulence moderate or worse → TURB, cloud in cloud / in and out → IMC, showers build-ups or CB → TS |
+| `reported_tags_json` | cancel reasons in `ARCHIVE_TAGS` (cancelled only; `OPS` dropped) + answers: icing light or worse → ICE, turbulence moderate or worse → TURB, cloud in cloud / in and out → IMC, showers build-ups or CB → TS |
 | `decision`, `debriefed`, `interesting`, `differs_from_forecast` | `flight_debriefs` and `flight_debrief_reports` |
 
 Forecast tags: worst aggregate status per tag over the chosen pack's

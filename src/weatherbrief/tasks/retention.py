@@ -244,6 +244,8 @@ def _ensure_facts_before_t2(db, rows, pirep_pack_ids, inactive_user_ids, debrief
         row = db.get(FlightFactsRow, flight_id) if ok else None
         if row is not None and row.forecast_frozen_at is not None:
             continue
+        if ok and row is None:
+            continue  # flight row gone: nothing left to record, don't block
         reason = "write_failed" if not ok else "tags_unreadable"
         if flight_id in overdue:
             logger.error("FLIGHT_FACTS_T2_PROCEEDS flight=%s reason=%s: past the grace, packs go without tags",

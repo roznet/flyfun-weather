@@ -45,12 +45,11 @@ SOURCES = ("forecast", "reported")
 MAX_LIMIT = 200
 
 
-def parse_csv(raw: str | None, allowed: list[str], name: str) -> list[str]:
-    """Split a comma list, upper/lower-cased like ``allowed``; ValueError on
-    an unknown value."""
+def parse_csv(raw: str | None, allowed: list[str], name: str, *, upper: bool) -> list[str]:
+    """Split a comma list, upper-cased (``upper``) or lower-cased to match
+    ``allowed``; ValueError on an unknown value."""
     if not raw:
         return []
-    upper = allowed[0].isupper()
     vals = [v.strip().upper() if upper else v.strip().lower() for v in raw.split(",") if v.strip()]
     bad = [v for v in vals if v not in allowed]
     if bad:

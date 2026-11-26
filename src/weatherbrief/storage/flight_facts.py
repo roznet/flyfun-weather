@@ -106,10 +106,12 @@ def forecast_tags_from_manifest(manifest: dict) -> dict[str, str]:
 
 def reported_tags(decision: str | None, reasons: list[str], answers) -> list[str]:
     """Sorted tags the pilot reported: cancel reasons for a cancelled flight,
-    else the answers that say the hazard was there (:data:`ANSWER_TAGS`)."""
+    else the answers that say the hazard was there (:data:`ANSWER_TAGS`).
+    Only :data:`ARCHIVE_TAGS` are kept: a reason no chip can filter on (e.g.
+    ``OPS``) would show on a row with nothing counting it."""
     tags: set[str] = set()
     if decision == "cancelled":
-        tags.update(r for r in reasons if r)
+        tags.update(r for r in reasons if r in ARCHIVE_TAGS)
     for a in answers:
         tag = ANSWER_TAGS.get((a.get("kind") or "", a.get("answer") or ""))
         if tag:

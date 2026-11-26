@@ -266,11 +266,11 @@ Other fields: `artifact_path` (pack directory), `models_skipped_region` (models 
 
 `advisory_summary: AdvisorySummary | None` (#276) is a compact RED/AMBER breakdown (`red`/`amber` counts + a severity-ordered `top: list[AdvisoryChip]` capped at 3, each a `status`+`name`) denormalized at briefing-build time via `tasks/advise.py:summarize_advisories` and persisted to the `advisory_summary_json` column. It lets the flights-list card render per-flight summary chips straight from the DB — never re-parsing `route_advisories.json` per flight. NULL for old packs (set on next refresh); `storage/flights.py:parse_advisory_summary` tolerates malformed/legacy values by degrading to None.
 
+`BriefingPackMeta.diagnostics: list[Diagnostic]` carries structured pipeline events from every stage (fetch, analyze, advisories, gramet, skewt, digest). See the **Diagnostic** section below.
+
 ### FlightFactsRow (`flight_facts`, #1031)
 
 A 1:1 sidecar to `flights` (cascade delete) that retention never touches, so the past-flights finder still knows an old flight's route and hazards after T2 has deleted its packs (and `advisory_summary_json` with them). Route ends, lat/lon, a simplified route line and distance; forecast tags (worst status per tag, amber or worse, from the pack `default_forecast_pack` chose) with `tags_recorded` (False = not recorded, never "no hazard") and `forecast_frozen_at`; reported tags; debrief outcome. No Pydantic model: written only by `storage/flight_facts.py`, read only by `api/flight_archive.py`. Rules in [past-flights.md](past-flights.md).
-
-`BriefingPackMeta.diagnostics: list[Diagnostic]` carries structured pipeline events from every stage (fetch, analyze, advisories, gramet, skewt, digest). See the **Diagnostic** section below.
 
 ## Diagnostic (`models/diagnostic.py`)
 

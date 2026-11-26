@@ -24,6 +24,9 @@ from weatherbrief.db.models import (
 from weatherbrief.debriefs.taxonomy import ConditionTag, Decision
 from weatherbrief.storage.debriefs import upsert_debrief
 from weatherbrief.storage.flight_facts import (
+    ANSWER_TAGS,
+    ARCHIVE_TAG_MAP,
+    ARCHIVE_TAGS,
     forecast_tags_from_manifest,
     reported_tags,
     route_fields,
@@ -77,6 +80,14 @@ class TestDerivation:
         assert reported_tags("cancelled", ["WIND", "ICE"], []) == ["ICE", "WIND"]
         # Reasons count only for a cancelled flight.
         assert reported_tags("flown", ["WIND"], []) == []
+        # A reason no archive chip filters on (OPS) is not recorded.
+        assert reported_tags("cancelled", ["OPS", "ICE"], []) == ["ICE"]
+
+    def test_every_mapped_tag_is_an_archive_chip(self):
+        # Guards the hand-kept maps against drift: a tag outside ARCHIVE_TAGS
+        # would be stored but never filtered or counted.
+        assert {t.value for t in ARCHIVE_TAG_MAP.values()} <= set(ARCHIVE_TAGS)
+        assert set(ANSWER_TAGS.values()) <= set(ARCHIVE_TAGS)
 
     def test_route_fields(self):
         f = route_fields([("egtk", 51.836, -1.32), ("LFAT", 50.517, 1.621)])
