@@ -48,6 +48,7 @@ class TimingScenariosViewModelTest {
         val confirms = mutableListOf<Pair<String, String>>()
         val rescans = mutableListOf<String>()
         var confirmError: Throwable? = null
+        var rescanError: Throwable? = null
 
         override suspend fun getFlight(id: String): FlightResponse =
             inner.getFlight(id).copy(flexibility = flexibility)
@@ -71,6 +72,7 @@ class TimingScenariosViewModelTest {
 
         override suspend fun rescanTimeOptions(flightId: String, timestamp: String) {
             rescans += timestamp
+            rescanError?.let { throw it }
         }
     }
 
@@ -167,5 +169,22 @@ class TimingScenariosViewModelTest {
 
         assertEquals(listOf(FixtureBriefingData.TIMESTAMP), repo.rescans)
         assertEquals("2099-06-30T12:00:00Z", vm.flight.value?.altDepartureTime)
+    }
+
+    @Test
+    fun aFailedRescanAfterSavingTheAlternateStillPolls() = runTest {
+        val repo = ScanRepository(FixtureBriefingRepository(), FlightFlexibility.SAME_DAY, listOf(done))
+        repo.rescanError = ApiError.ServerError(500, "boom")
+        val (vm, scope) = openBriefing(repo)
+        scope.advanceUntilIdle()
+        val pollsBefore = repo.polledTimestamps.size
+
+        vm.setScenarioAsAlternate("2099-06-30T12:00:00Z")
+        scope.advanceUntilIdle()
+
+        // The PATCH landed, so the alternate is kept, the panel re-polls and the error says so.
+        assertEquals("2099-06-30T12:00:00Z", vm.flight.value?.altDepartureTime)
+        assertEquals(pollsBefore + 1, repo.polledTimestamps.size)
+        assertTrue(vm.errorMessage.value.orEmpty().startsWith("Alternate time saved"))
     }
 }

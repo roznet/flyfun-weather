@@ -1,5 +1,7 @@
 package aero.flyfun.weather.viewmodel
 
+import android.util.Log
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import aero.flyfun.weather.data.ApiClient
@@ -919,11 +921,6 @@ class BriefingViewModel(
         timeOptionsPollJob = scope.launch { pollTimeOptions(flightId, timestamp) }
     }
 
-    fun stopTimeOptionsPolling() {
-        timeOptionsPollJob?.cancel()
-        timeOptionsPollJob = null
-    }
-
     /**
      * Poll `GET .../packs/{ts}/time-options` until a terminal status, with the iOS/web backoff
      * (3 s, x1.5, capped at 15 s). Keeps going while the scan is pending/running or a candidate
@@ -964,12 +961,16 @@ class BriefingViewModel(
 
     /**
      * Out of error budget. Clear the scan so a stale "this window looks smoother" can't linger
-     * with no sign it stopped updating; network failures show the offline line instead.
+     * with no sign it stopped updating; network failures show the offline line instead. The
+     * non-network case (e.g. a decode error from server drift) hides the section, so log it.
      */
     private fun abandonTimeOptionsPolling(lastError: Throwable?) {
         if (lastError is ApiError.NetworkError) {
             _timeOptionsOffline.value = true
         } else {
+            runCatching {
+                Log.w(TAG, "Timing scenarios poll gave up, section hidden: ${lastError?.javaClass?.simpleName}: ${lastError?.message}")
+            }
             _timeOptions.value = null
         }
     }
@@ -1008,6 +1009,8 @@ class BriefingViewModel(
     /**
      * "Set as alternate": PATCH only the flight's alternate departure time (its Flexibility
      * stays), re-queue the scan so the pinned row is re-graded, then re-poll. Same as iOS.
+     * Once the PATCH has landed the alternate is saved, so a failed rescan still re-polls (the
+     * ★ follows the flight) and says the alternate was kept.
      */
     fun setScenarioAsAlternate(departureTime: String) {
         val flightId = currentFlightId ?: _flight.value?.id ?: return
@@ -1016,12 +1019,19 @@ class BriefingViewModel(
             try {
                 val updated = repository.updateFlight(flightId, UpdateFlightRequest(altDepartureTime = departureTime))
                 _flight.value = updated.flight
-                repository.rescanTimeOptions(flightId, ts)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
                 _errorMessage.value = e.message ?: "Failed to set the alternate time"
                 return@launch
+            }
+            try {
+                repository.rescanTimeOptions(flightId, ts)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                _errorMessage.value = "Alternate time saved, but re-checking the scenarios failed" +
+                    (e.message?.let { ": $it" } ?: "")
             }
             startTimeOptionsPolling(ts)
         }
@@ -1095,6 +1105,8 @@ class BriefingViewModel(
     }
 
     companion object {
+        private const val TAG = "BriefingViewModel"
+
         /** Whether a flight's target date (YYYY-MM-DD) is today or later; blank/unparsable → true. */
         internal fun isTodayOrFuture(targetDate: String?, today: java.time.LocalDate = java.time.LocalDate.now()): Boolean {
             if (targetDate.isNullOrBlank()) return true
