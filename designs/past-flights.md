@@ -45,7 +45,8 @@ backfill, or no advisories): clients show "hazards not recorded", never "none".
   readable manifest) skips T2 this run, in the pack loop and the live pass
   (T1 still applies), logged `FLIGHT_FACTS_T2_BLOCKED`. After
   `T2_FACTS_GRACE_DAYS` (30) past its T2 day it goes anyway, logged
-  `FLIGHT_FACTS_T2_PROCEEDS` at error level. Dry runs write nothing.
+  `FLIGHT_FACTS_T2_PROCEEDS` at error level. The frozen records are
+  committed before any pack file is deleted. Dry runs write nothing.
 - **Backfill**: `python -m weatherbrief.tasks.flight_facts_backfill
   [--dry-run]` in the container, wrapped by
   `scripts/ops/backfill_flight_facts.py` (ssh, or `--local`).
