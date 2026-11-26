@@ -398,6 +398,16 @@ struct SkewTDetailView: View {
         cachedProfile = nil
         loadedResponse = nil
         availableGroups = []
+        // Not downloaded → each point is a network request. Scrubbing the
+        // cross-section moves the point every few frames and `.task(id:)`
+        // cancels the previous load, but the server still runs every request
+        // it received (2026-11-26: ~150 in a minute). Wait briefly so only the
+        // point the scrub settles on is fetched; a downloaded pack reads from
+        // disk and stays instant.
+        if viewModel.downloadState != .downloaded {
+            try? await Task.sleep(for: .milliseconds(200))
+            if Task.isCancelled { return }
+        }
         do {
             let response = try await viewModel.fetchSoundingProfile(pointIndex: pointIndex)
             // Build the heavy profile + variable catalog ONCE here, and pick the

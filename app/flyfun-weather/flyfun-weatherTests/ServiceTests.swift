@@ -76,21 +76,38 @@ import Foundation
 @Suite struct AutoDownloadModeTests {
 
     @Test func offNeverDownloads() {
-        #expect(AutoDownloadMode.off.allows(isOnWiFi: true, isConnected: true) == false)
+        #expect(AutoDownloadMode.off.allows(isOnWiFi: true, isConnected: true, isConstrained: false) == false)
     }
 
     @Test func wifiOnlyRequiresWiFi() {
-        #expect(AutoDownloadMode.wifiOnly.allows(isOnWiFi: true, isConnected: true))
+        #expect(AutoDownloadMode.wifiOnly.allows(isOnWiFi: true, isConnected: true, isConstrained: false))
         // Connected but on cellular (not Wi-Fi) → blocked.
-        #expect(AutoDownloadMode.wifiOnly.allows(isOnWiFi: false, isConnected: true) == false)
-        #expect(AutoDownloadMode.wifiOnly.allows(isOnWiFi: false, isConnected: false) == false)
+        #expect(AutoDownloadMode.wifiOnly.allows(isOnWiFi: false, isConnected: true, isConstrained: false) == false)
+        #expect(AutoDownloadMode.wifiOnly.allows(isOnWiFi: false, isConnected: false, isConstrained: false) == false)
     }
 
     @Test func wifiAndCellularNeedsOnlyConnectivity() {
-        #expect(AutoDownloadMode.wifiAndCellular.allows(isOnWiFi: false, isConnected: true))
-        #expect(AutoDownloadMode.wifiAndCellular.allows(isOnWiFi: true, isConnected: true))
+        #expect(AutoDownloadMode.wifiAndCellular.allows(isOnWiFi: false, isConnected: true, isConstrained: false))
+        #expect(AutoDownloadMode.wifiAndCellular.allows(isOnWiFi: true, isConnected: true, isConstrained: false))
         // Fully offline → still nothing to download.
-        #expect(AutoDownloadMode.wifiAndCellular.allows(isOnWiFi: false, isConnected: false) == false)
+        #expect(AutoDownloadMode.wifiAndCellular.allows(isOnWiFi: false, isConnected: false, isConstrained: false) == false)
+    }
+
+    @Test func lowDataModeBlocksEveryMode() {
+        for mode in AutoDownloadMode.allCases {
+            #expect(mode.allows(isOnWiFi: true, isConnected: true, isConstrained: true) == false)
+        }
+    }
+
+    @MainActor @Test func defaultsToAnyConnectionWhenNeverChosen() {
+        let key = "autoDownloadMode"
+        let saved = UserDefaults.standard.string(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.removeObject(forKey: key)
+        #expect(AppSettingsStore().autoDownloadMode == .wifiAndCellular)
+        // An explicit earlier choice survives the new default.
+        UserDefaults.standard.set(AutoDownloadMode.wifiOnly.rawValue, forKey: key)
+        #expect(AppSettingsStore().autoDownloadMode == .wifiOnly)
     }
 }
 

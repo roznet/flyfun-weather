@@ -6,9 +6,12 @@ import Foundation
 enum AutoDownloadMode: String, CaseIterable, Identifiable, Sendable {
     /// Never auto-download; only explicit per-pack downloads are cached.
     case off
-    /// Auto-download only on Wi-Fi / wired (the default).
+    /// Auto-download only on Wi-Fi / wired.
     case wifiOnly
-    /// Auto-download on any connection, including cellular.
+    /// Auto-download on any connection, including cellular (the default), except
+    /// in Low Data Mode. A pack bundle is ~0.1–0.7 MB gzipped, and without it
+    /// every Skew-T point is a separate request: scrubbing the cross-section on
+    /// cellular fired ~150 of them in a minute on 2026-11-26.
     case wifiAndCellular
 
     var id: String { rawValue }
@@ -22,11 +25,12 @@ enum AutoDownloadMode: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// Whether auto-download should proceed under the given connectivity.
-    func allows(isOnWiFi: Bool, isConnected: Bool) -> Bool {
+    /// `isConstrained` is iOS Low Data Mode, which every mode respects.
+    func allows(isOnWiFi: Bool, isConnected: Bool, isConstrained: Bool) -> Bool {
         switch self {
         case .off: false
-        case .wifiOnly: isOnWiFi
-        case .wifiAndCellular: isConnected
+        case .wifiOnly: isOnWiFi && !isConstrained
+        case .wifiAndCellular: isConnected && !isConstrained
         }
     }
 }
@@ -39,8 +43,11 @@ enum AutoDownloadMode: String, CaseIterable, Identifiable, Sendable {
 final class AppSettingsStore {
     private static let autoDownloadKey = "autoDownloadMode"
 
-    /// Whether/where to auto-download briefings for offline use. Defaults to
-    /// Wi-Fi only so the feature never silently spends a pilot's cellular data.
+    /// Whether/where to auto-download briefings for offline use. Defaults to any
+    /// connection (bundles are small; see `AutoDownloadMode.wifiAndCellular`).
+    /// The value is only persisted once the pilot changes it, so installs that
+    /// never touched the old Wi-Fi-only default pick up the new one, while an
+    /// explicit Wi-Fi-only choice is kept.
     var autoDownloadMode: AutoDownloadMode {
         didSet {
             guard oldValue != autoDownloadMode else { return }
@@ -53,7 +60,7 @@ final class AppSettingsStore {
            let mode = AutoDownloadMode(rawValue: raw) {
             self.autoDownloadMode = mode
         } else {
-            self.autoDownloadMode = .wifiOnly
+            self.autoDownloadMode = .wifiAndCellular
         }
     }
 }

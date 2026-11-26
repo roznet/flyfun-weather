@@ -179,7 +179,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Offline")
                 } footer: {
-                    Text("Automatically download upcoming briefings (today and later) for offline use, so Skew-Ts and the full briefing open instantly without a connection. Briefings for flights more than \(AppState.cacheRetentionDays) days past are cleared automatically.")
+                    Text("Automatically download upcoming briefings (today and later) for offline use, so Skew-Ts and the full briefing open instantly without a connection. A briefing is typically 0.1–0.7 MB; nothing is downloaded in Low Data Mode. Briefings for flights more than \(AppState.cacheRetentionDays) days past are cleared automatically.")
                 }
 
                 Section {

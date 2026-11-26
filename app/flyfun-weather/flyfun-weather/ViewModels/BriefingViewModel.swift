@@ -653,7 +653,7 @@ final class BriefingViewModel {
     }
 
     /// Auto-download the latest pack for offline use when the pilot has opted in
-    /// (Settings → Offline Auto-Download, default Wi-Fi only) and the flight is
+    /// (Settings → Offline Auto-Download, default any connection outside Low Data Mode) and the flight is
     /// today or in the future. No-op if the pack is already cached, a download is
     /// already running, or the current connectivity doesn't match the chosen
     /// mode. Past flights are intentionally skipped — they age out via
@@ -670,7 +670,8 @@ final class BriefingViewModel {
 
         guard settings.autoDownloadMode.allows(
             isOnWiFi: networkMonitor.isOnWiFi,
-            isConnected: networkMonitor.isConnected
+            isConnected: networkMonitor.isConnected,
+            isConstrained: networkMonitor.isConstrained
         ) else { return }
 
         Self.logger.info("Auto-downloading pack \(pack.fetchTimestamp) for offline use")
