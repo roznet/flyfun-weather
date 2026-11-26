@@ -30,17 +30,22 @@ final class PastFlightsViewModel {
     struct MonthSection: Identifiable {
         let title: String
         var rows: [PastArchiveRow]
-        var id: String { title }
+        /// First row's id: unique even if two runs share a title.
+        var id: String { rows.first?.id ?? title }
     }
 
-    /// Rows grouped by month (newest first) for the filtered view.
-    var monthSections: [MonthSection] {
+    private static let monthFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "LLLL yyyy"
         f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
+
+    /// Rows grouped by month (newest first) for the filtered view.
+    var monthSections: [MonthSection] {
         var out: [MonthSection] = []
         for row in rows {
-            let title = row.departureDate.map { f.string(from: $0) } ?? ""
+            let title = row.departureDate.map { Self.monthFormatter.string(from: $0) } ?? ""
             if out.last?.title == title {
                 out[out.count - 1].rows.append(row)
             } else {
@@ -80,6 +85,7 @@ final class PastFlightsViewModel {
             rows += resp.rows.filter { !seen.contains($0.id) }
             total = resp.total
             facets = resp.facets
+            error = nil
         } catch {
             guard token == loadToken else { return }
             self.error = error.localizedDescription

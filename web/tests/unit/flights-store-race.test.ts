@@ -52,7 +52,7 @@ beforeEach(() => {
   fetchFlights.mockClear();
   flightsStore.setState({
     flights: [], pastRows: [], pastTotal: 0, loading: false, loaded: false,
-    loadingMore: false, error: null, upcomingQuery: '', pastFilter: EMPTY_PAST_FILTER,
+    loadingMore: false, pastFiltering: false, error: null, upcomingQuery: '', pastFilter: EMPTY_PAST_FILTER,
   });
 });
 
@@ -99,6 +99,22 @@ describe('flights store: out-of-order guard', () => {
     expect(state.loading).toBe(false);
     // /api/flights no longer carries the past section.
     expect(fetchFlights).toHaveBeenCalledWith({ pastLimit: 0 });
+  });
+
+  it('ignores "show more" while a filter query is in flight', async () => {
+    flightsStore.setState({ pastRows: [row('old-a')], pastTotal: 20 });
+    const filter = deferred<ArchiveListResponse>();
+    fetchArchive.mockReturnValueOnce(filter.promise);
+
+    const filtered = flightsStore.getState().setPastFilter({ tags: ['ICE'] });
+    await flightsStore.getState().loadMorePast();  // no-op: would drop the filter result
+    filter.resolve(page([row('ice-1')], 1));
+    await filtered;
+
+    const state = flightsStore.getState();
+    expect(fetchArchive).toHaveBeenCalledTimes(1);
+    expect(state.pastRows.map((r) => r.id)).toEqual(['ice-1']);
+    expect(state.pastFiltering).toBe(false);
   });
 
   it('still applies the newest request when it lands last', async () => {

@@ -200,7 +200,7 @@ fun PastFlightsScreen(
                     }
                     sections.forEach { section ->
                         if (section.title.isNotEmpty()) {
-                            item(key = "month_${section.title}") {
+                            item(key = "month_${section.rows.first().id}") {
                                 Text(
                                     text = section.title.uppercase(),
                                     style = MaterialTheme.typography.labelMedium,

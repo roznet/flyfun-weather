@@ -59,6 +59,13 @@ struct PastFlightsTests {
         #expect(resp.rows[1].tagsRecorded == false)
     }
 
+    @Test func lenientRowAndFractionalSeconds() throws {
+        let json = #"{"id": "f9", "departure_time": "2026-11-20T09:00:00.123456+00:00"}"#
+        let row = try JSONDecoder.weatherBrief.decode(PastArchiveRow.self, from: Data(json.utf8))
+        #expect(row.departureDate != nil)
+        #expect(row.forecastTags.isEmpty && !row.tagsRecorded && row.reportedTags.isEmpty)
+    }
+
     @Test func emptyFilterAsksForAPageOnly() {
         let items = PastFilter.all.queryItems(limit: 30, offset: 0)
         #expect(items == [URLQueryItem(name: "limit", value: "30")])
