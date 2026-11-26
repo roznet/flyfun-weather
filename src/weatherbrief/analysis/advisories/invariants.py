@@ -16,7 +16,7 @@ packs. So they live here, in the library, and three callers share them:
 That is the difference between "a reviewer finds it at site N" and "every site
 at once".
 
-Three things deliberately are NOT violations:
+Four things deliberately are NOT violations:
 
 * an aggregate reading GREEN while a model reads RED — that is what MAJORITY
   means, and :func:`masked_flagged_models` reports it as an observation so the
@@ -25,7 +25,11 @@ Three things deliberately are NOT violations:
 * a flagged result that publishes no extent measurement at all (``fronts``,
   which grades a distance to a boundary rather than a span of route). The rules
   are about a published extent contradicting itself or its verdict; where there
-  is no extent there is nothing to contradict. See ``check_model_result``.
+  is no extent there is nothing to contradict. See ``check_model_result``;
+* a flag driven only by an airport (``ifr_feasibility`` RED on an arrival below
+  minimums over a clean route, #828): the route population is published but
+  none of it is affected, and the printed ``AirportClause`` names the cause.
+  A route flag with no printed airport clause is still a violation.
 """
 
 from __future__ import annotations
@@ -127,13 +131,25 @@ def check_model_result(
     # Publishing no measurement is outside this rule; publishing one and then
     # contradicting it is what the rule is for — so an evaluator that later
     # starts publishing an extent comes back under it with no edit here.
+    #
+    # A second shape outside the rule (#828): a flag whose only driver is an
+    # airport. ``ifr_feasibility`` grades RED on an arrival 300 ft below its
+    # minimum ceiling with a clean route; the route population is published but
+    # no point of it is affected, because an airport is not a span of route. The
+    # card names the airport through its printed ``AirportClause``, so a printed
+    # clause with zero route extent is that airport-only flag, not a missing
+    # coverage. Inventing an ``affected_points=1`` for it instead would publish
+    # a route percentage nobody measured (owner decision on #828, option 1).
+    # A route flag with no printed airport clause still fires.
+    airport_printed = any(c.printed for c in m.airport_clauses)
     if m.status in FLAGGED and (m.total_points > 0 or m.total_nm > 0):
         if m.affected_points <= 0 and m.affected_nm <= 0:
-            fail(
-                "flagged_has_coverage",
-                f"status {m.status.value} with no coverage at all "
-                f"(affected_points={m.affected_points}, affected_nm={m.affected_nm})",
-            )
+            if not airport_printed:
+                fail(
+                    "flagged_has_coverage",
+                    f"status {m.status.value} with no coverage at all "
+                    f"(affected_points={m.affected_points}, affected_nm={m.affected_nm})",
+                )
         elif m.affected_pct <= 0:
             fail(
                 "flagged_has_coverage",

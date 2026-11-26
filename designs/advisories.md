@@ -149,7 +149,13 @@ to results that publish an extent at all: `fronts` builds its result directly
 rather than through `build()` because it grades a *distance to a boundary* in km,
 not a span of route, so its extent fields stay zero even on a graded AMBER —
 nothing published, nothing to contradict. Publish an extent and it comes back
-under the rule with no edit to the invariants.
+under the rule with no edit to the invariants. The rule also skips a flag driven only by an
+airport (#828, owner's option 1): `ifr_feasibility` RED on an arrival below its
+minimum ceiling over a clean route publishes its route population with zero
+affected, and a printed `AirportClause` with zero route extent marks that shape.
+An airport is not a span of route, so the alternative (count the airport as
+`affected_points=1`) would publish a route percentage nobody measured. A flag
+with no printed airport clause and no extent still fires.
 
 ## The Evaluators
 
