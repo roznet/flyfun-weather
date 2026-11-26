@@ -1,6 +1,7 @@
 /** DOM management for the Flights list page. */
 
-import type { BriefingStatusInfo, CoveragePending, DebriefStats, FlightResponse, TripResponse, TripSummary } from '../store/types';
+import type { ArchiveFacets, ArchiveRow, BriefingStatusInfo, CoveragePending, DebriefStats, FlightResponse, TripResponse, TripSummary } from '../store/types';
+import { EMPTY_PAST_FILTER, HAZARD_CHIPS, OUTCOME_CHIPS, pastFilterActive, toggleValue, type PastFilterState } from '../helpers/past-archive';
 import type { RefreshEntry } from '../adapters/api-adapter';
 import { $, escapeHtml, formatDate, formatDepartureTime, formatAlt, isFlightPast, flightTitle, flightRouteCompact } from '../utils';
 import { MAX_QUERY_LEN, matchesQuery, parseQuery } from '../helpers/flight-search';
@@ -88,12 +89,17 @@ export const FILTER_MIN_FLIGHTS = 5;
 export interface FilterHandlers {
   /** Client-side query over future + recent. */
   upcomingQuery: string;
-  /** Server-side query over the paginated past section. */
-  pastQuery: string;
+  /** Past search + chips (#1032), applied by the archive endpoint. */
+  pastFilter: PastFilterState;
   /** A past-filter round-trip is in flight — drives the section's busy state. */
   pastFiltering: boolean;
+  /** The loaded past rows (archive, owned flights only). */
+  pastRows: ArchiveRow[];
+  /** Server chip counts for the current past filter. */
+  pastFacets: ArchiveFacets | null;
   onUpcomingQuery: (q: string) => void;
   onPastQuery: (q: string) => void;
+  onPastFilter: (patch: Partial<PastFilterState>) => void;
 }
 
 /** Render the shared filter-box markup used by both sections. */
@@ -527,6 +533,102 @@ function renderFlightCard(
   `;
 }
 
+// --- Past rows and chips (#1032) ---
+
+/** Small amber / red dots for a row's forecast hazards, worst first. */
+function hazardDots(tags: Record<string, 'amber' | 'red'>): string {
+  const order = (s: string) => (s === 'red' ? 0 : 1);
+  return HAZARD_CHIPS
+    .filter(c => tags[c.tag])
+    .sort((a, b) => order(tags[a.tag]) - order(tags[b.tag]))
+    .map(c => {
+      const label = `${t(c.labelKey)}: ${tags[c.tag] === 'red' ? t('past.statusRed') : t('past.statusAmber')}`;
+      return `<span class="past-hazard past-hazard-${tags[c.tag]}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${escapeHtml(t(c.labelKey))}</span>`;
+    })
+    .join('');
+}
+
+/** One archive row: compact card with the same select / briefing / delete
+ *  controls as the full card, so bulk actions keep working on Past. */
+export function renderPastRow(r: ArchiveRow, selected: boolean): string {
+  const title = [r.departure, r.destination].filter(Boolean).join(' → ') || r.route_name;
+  const date = new Date(r.departure_time);
+  const dateText = date.toLocaleDateString(getDateLocale(), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const tripBadge = r.trip
+    ? `<a class="badge badge-trip" href="/trip.html?id=${encodeURIComponent(r.trip.id)}" title="${escapeHtml(r.trip.name)}">${escapeHtml(r.trip.name)}</a> `
+    : '';
+  const outcome = r.decision
+    ? `<span class="badge badge-outcome badge-outcome-${r.decision}">${escapeHtml(t(`past.decision.${r.decision}`))}</span>`
+    : '';
+  const differs = r.differs_from_forecast
+    ? ` <span class="badge badge-outcome">${escapeHtml(t('past.chipDiffers'))}</span>`
+    : '';
+  const hazards = r.tags_recorded
+    ? (Object.keys(r.forecast_tags).length > 0
+      ? hazardDots(r.forecast_tags)
+      : `<span class="past-hazard-none">${escapeHtml(t('past.noForecastHazard'))}</span>`)
+    : `<span class="past-hazard-none">${escapeHtml(t('past.notRecorded'))}</span>`;
+  const reported = r.reported_tags.length > 0
+    ? `<div class="past-reported">${escapeHtml(t('past.reported'))}: ${r.reported_tags
+      .map(tag => escapeHtml(t(HAZARD_CHIPS.find(c => c.tag === tag)?.labelKey ?? '') || tag)).join(', ')}</div>`
+    : '';
+  const id = escapeHtml(r.id);
+  return `
+    <div class="flight-card past-row${selected ? ' selected' : ''}" data-id="${id}">
+      <label class="flight-select" title="${escapeHtml(t('flights.selectToggle'))}">
+        <input type="checkbox" class="flight-select-checkbox" data-id="${id}"${selected ? ' checked' : ''}>
+      </label>
+      <div class="flight-card-main">
+        <div class="flight-card-body">
+          <div class="flight-header">
+            ${tripBadge}<span class="flight-route">${escapeHtml(title)}</span>
+            <span class="flight-date">${escapeHtml(dateText)}</span> ${outcome}${differs}
+          </div>
+          <div class="past-hazards">${hazards}</div>
+          ${reported}
+          <div class="flight-actions">
+            <button class="btn btn-primary btn-briefing" data-id="${id}">${t('flights.btnBriefing')}</button>
+            <button class="btn btn-danger btn-delete" data-id="${id}">${t('flights.btnDelete')}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/** The chip row under the past search box, with the server's counts. */
+export function renderPastChips(f: PastFilterState, facets: ArchiveFacets | null): string {
+  const count = (n: number | undefined) =>
+    n != null ? ` <span class="past-chip-count">${n}</span>` : '';
+  const hazardClass = f.source === 'reported' ? 'past-chip past-chip-reported' : 'past-chip';
+  const hazards = HAZARD_CHIPS.map(c => {
+    const on = f.tags.includes(c.tag);
+    return `<button type="button" class="${hazardClass}${on ? ' is-on' : ''}" data-past-tag="${c.tag}" aria-pressed="${on}">${escapeHtml(t(c.labelKey))}${count(facets?.tags[c.tag])}</button>`;
+  }).join('');
+  const reported = f.source === 'reported';
+  const source = `<button type="button" class="past-chip past-chip-reported${reported ? ' is-on' : ''}" data-past-source aria-pressed="${reported}">${escapeHtml(t('past.chipReported'))}</button>`;
+  const outcomes = OUTCOME_CHIPS.map(c => {
+    const on = f.outcomes.includes(c.key);
+    return `<button type="button" class="past-chip${on ? ' is-on' : ''}" data-past-outcome="${c.key}" aria-pressed="${on}">${escapeHtml(t(c.labelKey))}${count(facets?.outcomes[c.key])}</button>`;
+  }).join('');
+  const hide = `<button type="button" class="past-chip${f.hideInactive ? ' is-on' : ''}" data-past-hide aria-pressed="${f.hideInactive}">${escapeHtml(t('past.chipHideInactive'))}</button>`;
+  return `
+    <div class="past-chips" role="group" aria-label="${escapeHtml(t('past.chipsLabel'))}">
+      <div class="past-chip-row">${hazards}${source}</div>
+      <div class="past-chip-row">${outcomes}${hide}</div>
+    </div>
+  `;
+}
+
+function renderPastNoMatch(): string {
+  return `
+    <div class="list-filter-nomatch">
+      <span>${escapeHtml(t('past.noMatch'))}</span>
+      <button type="button" class="btn btn-outline btn-sm btn-clear-past-filter">${escapeHtml(t('flights.filterNoMatchClear'))}</button>
+    </div>
+  `;
+}
+
 // --- Render functions ---
 
 export interface SelectionHandlers {
@@ -573,9 +675,10 @@ export function renderFlightList(
   // A filter that matches nothing must never reach the global empty state —
   // "No flights yet" while a query is active reads as data loss. Those cases
   // fall through to the per-section no-match lines below.
-  const filterActive = !!(filters?.upcomingQuery || filters?.pastQuery);
+  const filterActive = !!(filters?.upcomingQuery || (filters && pastFilterActive(filters.pastFilter)));
 
-  if (flights.length === 0 && !filterActive) {
+  const pastRows = filters?.pastRows ?? [];
+  if (flights.length === 0 && pastRows.length === 0 && !filterActive) {
     // Don't claim "no flights" until the list has actually been fetched —
     // otherwise the empty-state flashes while the user's flights are still
     // downloading. The loading spinner covers the pre-fetch window.
@@ -666,37 +769,35 @@ export function renderFlightList(
     ? `<div class="debrief-stats-section">${renderDebriefStats(stats)}</div>`
     : '';
 
-  // --- Past section (filter is server-side: see store.setPastQuery) ---
-  const pastQuery = filters?.pastQuery ?? '';
+  // --- Past section (#1032): rows, chips and counts all come from the
+  // archive endpoint (store.loadPast); nothing is filtered or counted here.
+  const pastFilter = filters?.pastFilter ?? EMPTY_PAST_FILTER;
+  const pastQuery = pastFilter.q;
   const pastTokens = parseQuery(pastQuery);
+  const pastActive = pastFilterActive(pastFilter);
   let pastSection = '';
-  // Under an active filter the section must survive a zero-match result —
-  // otherwise the box you are typing into vanishes on the first miss.
-  if (past.length > 0 || pastTokens.length > 0) {
+  if (past.length > 0 || pastRows.length > 0 || pastActive) {
     const expandedClass = pastExpanded ? '' : ' collapsed';
-    const pastCards = past.map(f =>
-      renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), pastTokens),
-    ).join('');
-    // The past section is paginated: the header shows the full count while
-    // only `past.length` rows are loaded. Under a filter the server reports
-    // the number of *matches*, so both the header and "show more" describe the
-    // filtered set rather than the whole history.
-    const totalPast = Math.max(pastTotal, past.length);
-    const remaining = totalPast - past.length;
+    // Rows from an older /api/flights (no archive) still render as cards.
+    const pastCards = pastRows.length > 0
+      ? pastRows.map(r => renderPastRow(r, selectedIds.has(r.id))).join('')
+      : past.map(f => renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), pastTokens)).join('');
+    const loadedPast = pastRows.length || past.length;
+    const totalPast = Math.max(pastTotal, loadedPast);
+    const remaining = totalPast - loadedPast;
     const showMoreBtn = remaining > 0
       ? `<button type="button" class="btn btn-outline btn-show-more-past" id="show-more-past">${t('flights.showMorePast', { count: remaining })}</button>`
       : '';
     // The past filter belongs to the open section, but it is *rendered*
-    // unconditionally and hidden by CSS when collapsed — the toggle only flips
-    // a class (no re-render), so a render-time `pastExpanded` check would leave
-    // the box missing until something else re-rendered the list.
-    const showPastFilter = filters != null
-      && (totalPast > FILTER_MIN_FLIGHTS || pastTokens.length > 0);
-    const pastFilter = showPastFilter
-      ? `<div class="list-filter-row list-filter-row-inset">${renderFilterBox('past-filter-input', pastQuery, t('flights.filterPastPlaceholder'))}</div>`
+    // regardless of the open state (toggling the section only flips a class,
+    // no re-render). The chips sit with it: they are the finder.
+    const showPastFilter = filters != null && (totalPast > FILTER_MIN_FLIGHTS || pastActive);
+    const pastFilterHtml = showPastFilter
+      ? `<div class="list-filter-row list-filter-row-inset">${renderFilterBox('past-filter-input', pastQuery, t('flights.filterPastPlaceholder'))}</div>
+         ${renderPastChips(pastFilter, filters!.pastFacets)}`
       : '';
-    const pastBody = past.length === 0 && pastTokens.length > 0
-      ? renderNoMatch(pastQuery)
+    const pastBody = loadedPast === 0 && pastActive
+      ? renderPastNoMatch()
       : `<div class="past-flights-list">${pastCards}</div>${showMoreBtn}`;
     const busyClass = filters?.pastFiltering ? ' is-filtering' : '';
     pastSection = `
@@ -704,7 +805,7 @@ export function renderFlightList(
         <button class="past-flights-toggle" id="past-flights-toggle">
           ${t('flights.past', { count: totalPast })}
         </button>
-        ${pastFilter}
+        ${pastFilterHtml}
         ${pastBody}
       </div>
     `;
@@ -780,6 +881,34 @@ export function renderFlightList(
           filters.onUpcomingQuery('');
         }
       });
+    });
+  }
+
+  // --- Past chips (#1032) ---
+  if (filters) {
+    const f = filters.pastFilter;
+    container.querySelectorAll<HTMLElement>('[data-past-tag]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        filters.onPastFilter({ tags: toggleValue(f.tags, chip.dataset.pastTag!) });
+      });
+    });
+    container.querySelectorAll<HTMLElement>('[data-past-outcome]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        filters.onPastFilter({ outcomes: toggleValue(f.outcomes, chip.dataset.pastOutcome!) });
+      });
+    });
+    container.querySelector('[data-past-source]')?.addEventListener('click', () => {
+      filters.onPastFilter({ source: f.source === 'reported' ? 'forecast' : 'reported' });
+    });
+    container.querySelector('[data-past-hide]')?.addEventListener('click', () => {
+      filters.onPastFilter({ hideInactive: !f.hideInactive });
+    });
+    container.querySelector('.btn-clear-past-filter')?.addEventListener('click', () => {
+      const input = document.getElementById('past-filter-input') as HTMLInputElement | null;
+      if (input) input.value = '';
+      if (pastQueryTimer) clearTimeout(pastQueryTimer);
+      pastQueryTimer = undefined;
+      filters.onPastFilter({ ...EMPTY_PAST_FILTER });
     });
   }
 
@@ -863,7 +992,7 @@ export function renderFlightList(
   // selections belonging to not-yet-loaded pages.
   let effectiveSelected = selectedIds;
   if (filterActive && selectedIds.size > 0) {
-    const visible = new Set([...futureShown, ...recentShown, ...past].map(f => f.id));
+    const visible = new Set([...[...futureShown, ...recentShown, ...past].map(f => f.id), ...pastRows.map(r => r.id)]);
     if ([...selectedIds].some(id => !visible.has(id))) {
       // Apply locally for the rest of *this* render, and push to the store on a
       // microtask. Calling the store inline would update it synchronously,
@@ -877,7 +1006,10 @@ export function renderFlightList(
 
   const active = [...futureShown, ...recentShown];
   const selectableActive = active.filter(f => f.role !== 'subscriber').map(f => f.id);
-  const selectablePast = past.filter(f => f.role !== 'subscriber').map(f => f.id);
+  // Archive rows are owned flights only, so every one is selectable.
+  const selectablePast = pastRows.length > 0
+    ? pastRows.map(r => r.id)
+    : past.filter(f => f.role !== 'subscriber').map(f => f.id);
   renderSelectionBar(
     effectiveSelected.size,
     [...selectableActive, ...selectablePast],

@@ -411,6 +411,9 @@ class CachingBriefingRepository(
     override suspend fun debriefReport(flightId: String): DebriefReport =
         online.debriefReport(flightId)
 
+    override suspend fun pastArchive(query: List<Pair<String, String>>): PastArchiveResponse =
+        online.pastArchive(query)
+
     override suspend fun saveDebriefAnswers(flightId: String, req: DebriefAnswersRequest): DebriefReport =
         online.saveDebriefAnswers(flightId, req)
 

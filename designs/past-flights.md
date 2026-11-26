@@ -70,6 +70,29 @@ filter. A chip's count is what turning it on alone would give.
 
 `GET /api/flights` is unchanged.
 
+## Clients (#1032)
+
+Same chips, same order, same labels on every client; each keeps its own
+copy, so change all three together: web `web/ts/helpers/past-archive.ts`,
+iOS `PastChips` / `PastFilter` (`Models/API/PastArchiveResponse.swift`),
+Android `PastChips` / `PastFilter` (`model/PastArchiveModels.kt`). The filter
+to query mapping is the only client logic; rows, counts and grouping by
+month come from the server's order.
+
+- Web: the Past section of `flights.html` reads the archive (list view)
+  instead of the `past` slice of `GET /api/flights` (which it now asks with
+  `past_limit=0`). Search box + chips drive the query; paging is "Load more".
+  Subscribed past flights no longer appear there.
+- iOS: the list keeps a teaser of the latest 3 Past flights plus "See all",
+  which pushes `PastFlightsView` (`.searchable`, chips, month sections).
+  iPad adds saved filters (All past, With icing, With convection, Cancelled,
+  Debriefed) under the teaser. A row opens the briefing through the list's
+  selection (fetched by id if it is not loaded).
+- Android: same teaser + "See all" to `PastFlightsScreen`. The list's
+  in-app search no longer filters Past; with a search on, the button reads
+  "Search past" and opens the screen with that query. Back from a briefing
+  opened there returns to the Past screen (phone).
+
 ## Gotchas
 
 - Cost: the archive loads all owned flights and their facts per request

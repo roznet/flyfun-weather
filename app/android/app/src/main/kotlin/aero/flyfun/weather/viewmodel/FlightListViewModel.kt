@@ -283,7 +283,10 @@ class FlightListViewModel(
         val filtered = if (query.isEmpty()) {
             _flights.value
         } else {
+            // Past is not filtered here (#1032): its teaser stays the latest few and
+            // "Search past" runs the query on the server's archive.
             _flights.value.filter { flight ->
+                flight.resolvedSection(nowEpochMs) == FlightSection.PAST ||
                 flight.routeName.lowercase().contains(query) ||
                     flight.waypoints.any { it.lowercase().contains(query) } ||
                     (flight.tripName?.lowercase()?.contains(query) == true)

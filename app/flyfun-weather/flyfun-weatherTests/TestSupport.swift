@@ -297,6 +297,12 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
     func forecastMap(day: Int, hour: Int) async throws -> ForecastMapResponse { throw MockError.notStubbed("forecastMap") }
     func forecastDays() async throws -> ForecastDaysResponse { try forecastDaysResult.get() }
     func frequentAirports() async throws -> FrequentAirportsResponse { throw MockError.notStubbed("frequentAirports") }
+    /// Stub for the past-flights finder; records every query sent.
+    var pastArchiveHandler: (@Sendable ([URLQueryItem]) throws -> PastArchiveResponse)?
+    func pastArchive(_ query: [URLQueryItem]) async throws -> PastArchiveResponse {
+        guard let handler = pastArchiveHandler else { throw MockError.notStubbed("pastArchive") }
+        return try handler(query)
+    }
     /// Stub for the historical map VM tests; records every (at, lead) requested.
     var historicalMapHandler: (@Sendable (Date, Int) throws -> HistoricalMapResponse)?
     var historicalRangeHandler: (@Sendable () throws -> HistoricalRangeResponse)?

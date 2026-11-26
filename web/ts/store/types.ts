@@ -2153,3 +2153,41 @@ export interface ElevationProfile {
   max_elevation_ft: number;
   total_distance_nm: number;
 }
+
+// --- Past-flights archive (#1031 server, #1032 clients) ---
+
+/** One Past flight as `GET /api/flights/archive?view=list` returns it. */
+export interface ArchiveRow {
+  id: string;
+  departure_time: string;
+  departure: string | null;
+  destination: string | null;
+  route_name: string;
+  trip: { id: string; name: string } | null;
+  /** Worst status per tag, amber or worse only: `{ ICE: 'red' }`. */
+  forecast_tags: Record<string, 'amber' | 'red'>;
+  forecast_worst: 'amber' | 'red' | null;
+  /** False: the briefing was gone before it was recorded ("not recorded", never "none"). */
+  tags_recorded: boolean;
+  reported_tags: string[];
+  decision: 'flown' | 'cancelled' | 'monitoring' | null;
+  debriefed: boolean;
+  differs_from_forecast: boolean;
+  distance_nm: number | null;
+}
+
+export interface ArchiveFacets {
+  source: 'forecast' | 'reported';
+  tags: Record<string, number>;
+  outcomes: Record<string, number>;
+  not_recorded: number;
+}
+
+export interface ArchiveListResponse {
+  view: 'list';
+  total: number;
+  limit: number;
+  offset: number;
+  facets: ArchiveFacets;
+  rows: ArchiveRow[];
+}

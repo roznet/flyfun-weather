@@ -105,7 +105,8 @@ private val FLIGHT_DATE_FMT: DateTimeFormatter =
 /**
  * Flight list screen mirroring iOS `FlightListView`.
  * Features:
- * - Grouped sections: Upcoming (`FUTURE`), Recently Completed (`RECENT`), Past (`PAST`, collapsible)
+ * - Grouped sections: Upcoming (`FUTURE`), Recently Completed (`RECENT`), Past (`PAST`: the latest
+ *   few, with "See all" opening the server-filtered Past flights screen, #1032)
  * - Assessment status dot (GREEN / AMBER / RED / UNAVAILABLE)
  * - Trip badge & click-to-open Trip detail
  * - Long-press multi-select mode with bulk Delete, Move to Trip, or New Trip from selected
@@ -125,6 +126,8 @@ fun FlightListScreen(
     onAddNextLegClick: (FlightResponse) -> Unit = {},
     onOpenTripClick: (String) -> Unit = {},
     onOpenMapsClick: () -> Unit = {},
+    /** "See all" on Past (#1032): opens the Past flights screen with the current search. */
+    onOpenPastClick: (query: String) -> Unit = {},
     onOpenWhatsNewClick: () -> Unit = {},
     onOpenSettingsClick: () -> Unit = {},
     /** Site the "Open website" / "Help" rows open (#996). */
@@ -416,21 +419,30 @@ fun FlightListScreen(
                     contentPadding = PaddingValues(bottom = 88.dp, top = 4.dp),
                 ) {
                     groups.forEach { group ->
-                        val isCollapsed = group.section in collapsedSections
+                        // Past (#1032) is a teaser, never collapsed: the full list,
+                        // search and chips are on the Past flights screen.
+                        val isPast = group.section == FlightSection.PAST
+                        val isCollapsed = !isPast && group.section in collapsedSections
                         item(key = "header_${group.section.name}") {
                             FlightSectionHeader(
                                 group = group,
                                 isCollapsed = isCollapsed,
                                 onToggleCollapse = {
-                                    if (group.section.startsCollapsed || group.section == FlightSection.PAST) {
+                                    if (group.section.startsCollapsed && !isPast) {
                                         viewModel.toggleSectionCollapsed(group.section)
                                     }
                                 },
+                                onSeeAll = if (isPast) {
+                                    { onOpenPastClick(searchQuery) }
+                                } else {
+                                    null
+                                },
+                                searching = searchQuery.isNotBlank(),
                             )
                         }
                         if (!isCollapsed) {
                             items(
-                                items = group.flights,
+                                items = if (isPast) group.flights.take(PAST_TEASER_COUNT) else group.flights,
                                 key = { it.id },
                             ) { flight ->
                                 FlightRowCard(
@@ -590,13 +602,20 @@ private fun TripsQuickStrip(
     }
 }
 
+/** Past flights shown in the main list before "See all" (#1032). */
+private const val PAST_TEASER_COUNT = 3
+
 @Composable
 private fun FlightSectionHeader(
     group: FlightGroup,
     isCollapsed: Boolean,
     onToggleCollapse: () -> Unit,
+    /** Past only: opens the Past flights screen. */
+    onSeeAll: (() -> Unit)? = null,
+    /** A list search is on: Past's button runs it on the archive. */
+    searching: Boolean = false,
 ) {
-    val canCollapse = group.section.startsCollapsed || group.section == FlightSection.PAST
+    val canCollapse = group.section.startsCollapsed && onSeeAll == null
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -611,6 +630,11 @@ private fun FlightSectionHeader(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
+        if (onSeeAll != null) {
+            TextButton(onClick = onSeeAll, modifier = Modifier.testTag("pastSeeAll")) {
+                Text(if (searching) "Search past" else "See all")
+            }
+        }
         if (canCollapse) {
             Icon(
                 imageVector = if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,

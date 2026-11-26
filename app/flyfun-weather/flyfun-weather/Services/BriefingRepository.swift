@@ -121,6 +121,9 @@ protocol BriefingRepository: Sendable {
     func forecastDays() async throws -> ForecastDaysResponse
     /// Top-5 departure/destination airports from history — cold-open map centring (#419).
     func frequentAirports() async throws -> FrequentAirportsResponse
+    /// One page of the past-flights finder (#1031): filtered, paged and counted
+    /// on the server. Online-only.
+    func pastArchive(_ query: [URLQueryItem]) async throws -> PastArchiveResponse
     // Historical map (#629) — online-only. Every selection rule is server-side.
     /// METAR / TAF / model runs at a past instant. `at` is floored to the 30-min
     /// grid server-side; `lead` 0 = latest runs before `at`, N = runs from N days before.
@@ -501,6 +504,15 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func frequentAirports() async throws -> FrequentAirportsResponse {
         try await client.request("/api/flights/frequent-airports")
+    }
+
+    func pastArchive(_ query: [URLQueryItem]) async throws -> PastArchiveResponse {
+        var components = URLComponents()
+        components.path = "/api/flights/archive"
+        components.queryItems = query
+        // `+` is legal in a query but read as a space by the server: encode it.
+        let encoded = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return try await client.requestURL("/api/flights/archive" + (encoded.map { "?\($0)" } ?? ""))
     }
 
     func advisories(flightId: String, timestamp: String) async throws -> AdvisoriesResponse {

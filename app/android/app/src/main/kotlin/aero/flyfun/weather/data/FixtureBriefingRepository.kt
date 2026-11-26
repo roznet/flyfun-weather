@@ -365,6 +365,15 @@ open class FixtureBriefingRepository(
         return resp
     }
 
+    /** The archive served (#1032); tests set it, demo mode gets an empty Past screen. */
+    var pastArchiveFixture: PastArchiveResponse = PastArchiveResponse()
+    val pastArchiveRequests = mutableListOf<List<Pair<String, String>>>()
+
+    override suspend fun pastArchive(query: List<Pair<String, String>>): PastArchiveResponse {
+        pastArchiveRequests += query
+        return pastArchiveFixture
+    }
+
     override suspend fun debriefReport(flightId: String): DebriefReport {
         val report = debriefReportFixture ?: throw ApiError.NotFound
         return if (savedDebrief?.decision == "cancelled") report.copy(cancelled = true, questions = emptyList()) else report
