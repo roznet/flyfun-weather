@@ -192,6 +192,32 @@ Any interruption burns an attempt regardless of cause. Likewise no
 SIGTERM-vs-SIGKILL distinction — a deploy mid-briefing burns an attempt and
 still gets its one resume.
 
+## Flight moved or deleted mid-run
+
+`POST /flights/{id}/move` re-keys a flight (date/route/altitude are in the ID)
+by deleting the old row, so a refresh already running on the old ID can never
+persist: its `briefing_packs` insert fails the FK. Before, it ran to the end
+(paid digest included), closed `failed`, and left a pack directory no row
+pointed at — invisible to retention. `tasks/refresh_flight_gone.py` handles it
+on every full-refresh path (streaming, queued, scheduler, trip, resume):
+
+- **Gates** — `_gated_progress` checks the flight row by PK at
+  `route_analysis`, `fetch_gramet`, `briefing_ready` (top-level emits ahead of
+  analysis, GRAMET, and the provisional insert + LLM digest; never inside GRIB
+  decode) and raises `FlightGoneError`.
+- **Classification** — the failure handler asks
+  `discard_refresh_for_gone_flight`: gate error, or the flight now absent ⇒
+  remove the run's own pack dir, close the job `abandoned` ("flight moved or
+  deleted during the refresh"), log INFO. `_auto_refresh_one` re-raises it as
+  `FlightGoneError` for its three callers; trip legs report `skipped`.
+
+Safety invariant: abandon only on a *confirmed* absent row in committed state —
+the exact condition under which the finalize insert fails anyway. DB errors
+fail open (assume it exists). The one window where the old code would have
+succeeded — the same ID re-created between gate and finalize (move A→B→A) — is
+followed by the client's own refresh of the re-created flight. Full argument in
+the module docstring.
+
 ## Client-visible terminal state
 
 `GET /flights/{id}/packs/refresh/status` falls back to the job row when there is

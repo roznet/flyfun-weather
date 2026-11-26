@@ -69,6 +69,10 @@ from weatherbrief.storage.sounding_profiles import (
     sidecar_sounding_profile,
 )
 from weatherbrief.tasks.route_weather import run_realtime_refresh
+from weatherbrief.tasks.refresh_flight_gone import (
+    check_flight_at_stage,
+    discard_refresh_for_gone_flight,
+)
 from weatherbrief.models.live import (
     LiveChanges,
     LiveLayerResponse,
@@ -2393,6 +2397,21 @@ def _finalize_refresh(
     )
 
 
+def _gated_progress(flight_id: str):
+    """Progress callback shared by every full-refresh path.
+
+    Advances the registry (stage labels for pollers, durable heartbeat) and, at
+    the gate stages, stops the pipeline with ``FlightGoneError`` if the flight
+    was moved or deleted meanwhile — see ``tasks/refresh_flight_gone.py`` for
+    why that can never abandon a refresh that would have succeeded.
+    """
+    def callback(stage: str, detail: str | None = None) -> None:
+        refresh_registry.update_progress(flight_id, stage, detail)
+        check_flight_at_stage(flight_id, stage)
+
+    return callback
+
+
 #: Refresh sources a *client* may declare via ``?source=`` on the refresh
 #: endpoints. ``scheduler`` is set internally (never accepted from a client, so
 #: a caller can't spoof the auto-refresh trigger); anything unrecognised falls
@@ -2764,10 +2783,9 @@ async def refresh_briefing(
                 # No SSE stream here, but a client polling /refresh/status still
                 # wants stage labels instead of a dead progress bar — and the
                 # durable job row needs its heartbeat and last-stage to advance
-                # so an interrupted run records where it died (#499).
-                progress_callback=lambda stage, detail=None: (
-                    refresh_registry.update_progress(flight_id, stage, detail)
-                ),
+                # so an interrupted run records where it died (#499). It also
+                # stops the run early if the flight is moved/deleted meanwhile.
+                progress_callback=_gated_progress(flight_id),
             )
             queue_wait, total_elapsed = refresh_registry.get_timing(flight_id)
             result.usage.elapsed_seconds = total_elapsed
@@ -2799,8 +2817,12 @@ async def refresh_briefing(
             refresh_registry.mark_outcome(flight_id, "succeeded")
             logger.info("Background refresh complete for %s", flight_id)
         except Exception as exc:
-            refresh_registry.mark_outcome(flight_id, "failed", str(exc))
-            logger.error("Background refresh failed for %s: %s", flight_id, exc, exc_info=True)
+            if discard_refresh_for_gone_flight(flight_id, pack_path, exc):
+                refresh_registry.mark_outcome(flight_id, "abandoned", str(exc))
+                logger.info("Background refresh abandoned for %s: %s", flight_id, exc)
+            else:
+                refresh_registry.mark_outcome(flight_id, "failed", str(exc))
+                logger.error("Background refresh failed for %s: %s", flight_id, exc, exc_info=True)
         finally:
             refresh_registry.unregister(flight_id)
 
@@ -3061,8 +3083,10 @@ async def refresh_briefing_stream(
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
 
+    gated_progress = _gated_progress(flight_id)
+
     def progress_callback(stage: str, detail: str | None = None) -> None:
-        refresh_registry.update_progress(flight_id, stage, detail)
+        gated_progress(stage, detail)
         # briefing_ready emits a dedicated SSE event with the provisional pack
         # metadata (handled by briefing_ready_callback below). Skip the generic
         # progress event so clients don't see two notifications for the same
@@ -3176,9 +3200,15 @@ async def refresh_briefing_stream(
             refresh_registry.mark_outcome(flight_id, "succeeded")
             asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
         except Exception as exc:
-            refresh_registry.mark_outcome(flight_id, "failed", str(exc))
-            logger.error("Streaming refresh failed: %s", exc, exc_info=True)
-            error_event = {"type": "error", "message": str(exc)}
+            if discard_refresh_for_gone_flight(flight_id, pack_path, exc):
+                refresh_registry.mark_outcome(flight_id, "abandoned", str(exc))
+                logger.info("Streaming refresh abandoned for %s: %s", flight_id, exc)
+                message = "This flight was moved or deleted, so its refresh was stopped."
+            else:
+                refresh_registry.mark_outcome(flight_id, "failed", str(exc))
+                logger.error("Streaming refresh failed: %s", exc, exc_info=True)
+                message = str(exc)
+            error_event = {"type": "error", "message": message}
             asyncio.run_coroutine_threadsafe(queue.put(error_event), loop)
         finally:
             refresh_registry.unregister(flight_id)

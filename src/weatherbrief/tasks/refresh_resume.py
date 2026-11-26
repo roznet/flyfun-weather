@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.db import SessionLocal
 from weatherbrief.db.models import BriefingRefreshJobRow, FlightRow
+from weatherbrief.tasks.refresh_flight_gone import FlightGoneError
 from weatherbrief.storage.refresh_jobs import (
     TERMINAL_STATUSES,
     finish_job,
@@ -278,6 +279,9 @@ async def reconcile_one(job_id: int, app_state) -> None:
             "Refresh resume: %s for flight %s",
             "completed" if ran else "skipped by the gate", flight_id,
         )
+    except FlightGoneError as exc:
+        refresh_registry.mark_outcome(flight_id, "abandoned", str(exc))
+        logger.info("Refresh resume abandoned for flight %s: %s", flight_id, exc)
     except Exception as exc:
         refresh_registry.mark_outcome(flight_id, "failed", str(exc))
         logger.error("Refresh resume failed for flight %s", flight_id, exc_info=True)

@@ -52,6 +52,7 @@ from flyfun_common.db import SessionLocal
 from sqlalchemy.orm import Session
 
 from weatherbrief.db.models import FlightTripRow
+from weatherbrief.tasks.refresh_flight_gone import FlightGoneError
 from weatherbrief.storage import trips as trip_storage
 
 if TYPE_CHECKING:  # imported lazily at runtime — api.trips imports this module
@@ -413,6 +414,10 @@ def _run_leg(trip_id: str, app_state, user_id: str, run_id: str) -> None:
                 "succeeded" if ran else "skipped",
                 None if ran else "refresh gate declined a full run",
             )
+        except FlightGoneError as exc:
+            outcome = "skipped"
+            refresh_registry.mark_outcome(flight_id, "abandoned", str(exc))
+            logger.info("Trip %s: leg %s refresh abandoned: %s", trip_id, flight_id, exc)
         except Exception as exc:  # noqa: BLE001 — one bad leg must not stop the chain
             outcome = "failed"
             refresh_registry.mark_outcome(flight_id, "failed", str(exc))

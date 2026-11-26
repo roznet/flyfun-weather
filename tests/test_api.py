@@ -1264,6 +1264,57 @@ class TestRefreshEndpoint:
 
     @patch("weatherbrief.pipeline.execute_briefing")
     @patch("weatherbrief.airports._load_airport_model")
+    def test_flight_moved_mid_refresh_is_abandoned_and_cleaned(
+        self, mock_load, mock_execute, client, sample_flight, monkeypatch,
+    ):
+        """A flight moved mid-refresh ends `abandoned` and leaves no pack dir."""
+        import time
+        from pathlib import Path
+
+        from airport_mocks import TEST_AIRPORTS, mock_model
+        from weatherbrief.api.packs import refresh_registry
+        from weatherbrief.tasks import refresh_flight_gone
+
+        mock_load.return_value = mock_model(TEST_AIRPORTS)
+        client.app.state.db_path = "/fake/db"
+        monkeypatch.setattr(refresh_flight_gone, "flight_confirmed_gone", lambda _fid: True)
+
+        written: list[Path] = []
+
+        def _pipeline(*args, **kwargs):
+            pack = Path(kwargs["options"].output_dir)
+            pack.mkdir(parents=True, exist_ok=True)
+            (pack / "briefing.json").write_text("{}")
+            written.append(pack)
+            kwargs["progress_callback"]("route_analysis", None)
+            raise AssertionError("gate should have stopped the pipeline")
+
+        mock_execute.side_effect = _pipeline
+        outcomes: list[tuple] = []
+        real_mark = refresh_registry.mark_outcome
+
+        def _record(fid, status, error=None):
+            outcomes.append((fid, status, error))
+            real_mark(fid, status, error)
+
+        monkeypatch.setattr(refresh_registry, "mark_outcome", _record)
+
+        resp = client.post(f"/api/flights/{sample_flight.id}/packs/refresh")
+        assert resp.status_code == 202
+        for _ in range(50):
+            if not refresh_registry._entries.get(sample_flight.id):
+                break
+            time.sleep(0.1)
+        else:
+            refresh_registry.unregister(sample_flight.id)
+            pytest.fail("refresh worker did not finish")
+
+        assert [o[1] for o in outcomes] == ["abandoned"]
+        assert "moved or deleted" in outcomes[0][2]
+        assert written and not written[0].exists()
+
+    @patch("weatherbrief.pipeline.execute_briefing")
+    @patch("weatherbrief.airports._load_airport_model")
     def test_refresh_reports_progress_without_a_stream(
         self, mock_load, mock_execute, client, sample_flight,
     ):

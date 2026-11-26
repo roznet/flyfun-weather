@@ -305,8 +305,8 @@ Key exports: `DecodePriority`, `PriorityDecodeDispatcher`, `set_decode_priority`
 → Full doc: grib-decode-dispatcher.md
 
 ### refresh-durability
-Durable briefing-refresh tracking (`briefing_refresh_jobs`, migration 082) as a best-effort write-through mirror of the in-memory `_RefreshRegistry`, plus a one-shot boot-time pass that abandons or resumes refreshes interrupted by a container restart (OOM/deploy/crash). Single uvicorn worker ⇒ any non-terminal row at boot is an orphan; `WB_REFRESH_MAX_ATTEMPTS` (default 2) caps retries; `/refresh/status` falls back to the row so a reload reports "interrupted"/"gave up" instead of nothing.
-Key exports: `BriefingRefreshJobRow`, `record_queued`, `record_running`, `record_heartbeat`, `record_finished`, `list_orphans`, `latest_job_for_flight`, `_RefreshRegistry(durable=True)`, `mark_outcome`, `note_pack_path`, `decide_resume`, `run_refresh_resume`, `resume_max_attempts`
+Durable briefing-refresh tracking (`briefing_refresh_jobs`, migration 082) as a best-effort write-through mirror of the in-memory `_RefreshRegistry`, plus a one-shot boot-time pass that abandons or resumes refreshes interrupted by a container restart (OOM/deploy/crash). Single uvicorn worker ⇒ any non-terminal row at boot is an orphan; `WB_REFRESH_MAX_ATTEMPTS` (default 2) caps retries; `/refresh/status` falls back to the row so a reload reports "interrupted"/"gave up" instead of nothing. A refresh whose flight is moved/deleted mid-run stops at stage gates and closes `abandoned`, removing its pack dir (`tasks/refresh_flight_gone.py`).
+Key exports: `BriefingRefreshJobRow`, `record_queued`, `record_running`, `record_heartbeat`, `record_finished`, `list_orphans`, `latest_job_for_flight`, `_RefreshRegistry(durable=True)`, `mark_outcome`, `note_pack_path`, `decide_resume`, `run_refresh_resume`, `resume_max_attempts`, `FlightGoneError`, `check_flight_at_stage`, `discard_refresh_for_gone_flight`
 → Full doc: refresh-durability.md
 
 ### multi-user-deployment

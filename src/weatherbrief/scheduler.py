@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from flyfun_common.db import SessionLocal
 from weatherbrief.db.models import FlightRow, FlightTripRow
+from weatherbrief.tasks.refresh_flight_gone import FlightGoneError
 from weatherbrief.fetch.variables import is_beyond_forecast_horizon
 from weatherbrief import paths
 
@@ -307,6 +308,10 @@ async def process_auto_refreshes(app_state) -> None:
                 logger.info(
                     "Auto-refresh %s: %s", "completed" if ran else "skipped", row.id,
                 )
+            except FlightGoneError as exc:
+                leg_outcome = "skipped"
+                refresh_registry.mark_outcome(row.id, "abandoned", str(exc))
+                logger.info("Auto-refresh abandoned for %s: %s", row.id, exc)
             except Exception as exc:
                 leg_outcome = "failed"
                 refresh_registry.mark_outcome(row.id, "failed", str(exc))
@@ -684,8 +689,11 @@ def _auto_refresh_one(
     ``succeeded`` would make the post-mortem record lie (issue #499).
     """
     from weatherbrief.api.packs import (
-        _finalize_refresh, _notify_refresh_complete, _post_refresh_live_update, _prepare_refresh,
-        gated_data_status, refresh_registry,
+        _finalize_refresh, _gated_progress, _notify_refresh_complete, _post_refresh_live_update,
+        _prepare_refresh, gated_data_status, refresh_registry,
+    )
+    from weatherbrief.tasks.refresh_flight_gone import (
+        FlightGoneError, discard_refresh_for_gone_flight,
     )
     from weatherbrief.storage.flights import _row_to_flight, list_packs
 
@@ -738,32 +746,43 @@ def _auto_refresh_one(
         # isolated to the cycle and visible to enrich_forecasts.
         set_decode_priority(DecodePriority.SCHEDULED)
 
-        result = execute_briefing(
-            route=route,
-            departure_time=flight.departure_time,
-            options=options,
-            # Nobody streams a scheduled or resumed refresh, but a user who
-            # opens the briefing while one runs polls /refresh/status — without
-            # this they watch "Starting refresh" for the whole pipeline. It also
-            # keeps the durable job row's heartbeat and last-stage moving, so a
-            # resumed run that dies again still records where (#499).
-            progress_callback=lambda stage, detail=None: (
-                refresh_registry.update_progress(flight_row.id, stage, detail)
-            ),
-        )
+        try:
+            result = execute_briefing(
+                route=route,
+                departure_time=flight.departure_time,
+                options=options,
+                # Nobody streams a scheduled or resumed refresh, but a user who
+                # opens the briefing while one runs polls /refresh/status —
+                # without this they watch "Starting refresh" for the whole
+                # pipeline. It also keeps the durable job row's heartbeat and
+                # last-stage moving, so a resumed run that dies again still
+                # records where (#499), and stops the run early if the flight
+                # is moved/deleted meanwhile.
+                progress_callback=_gated_progress(flight_row.id),
+            )
 
-        # Capture timing before unregister
-        queue_wait, total_elapsed = refresh_registry.get_timing(flight_row.id)
-        result.usage.elapsed_seconds = total_elapsed
-        result.usage.queue_wait_seconds = queue_wait
-        result.usage.triggered_by = triggered_by
+            # Capture timing before unregister
+            queue_wait, total_elapsed = refresh_registry.get_timing(flight_row.id)
+            result.usage.elapsed_seconds = total_elapsed
+            result.usage.queue_wait_seconds = queue_wait
+            result.usage.triggered_by = triggered_by
 
-        meta = _finalize_refresh(
-            flight_row.id, flight, fetch_ts, pack_path, result, db,
-            user_id=user_id,
-            as_of_time=resolved_as_of,
-        )
-        db.commit()
+            meta = _finalize_refresh(
+                flight_row.id, flight, fetch_ts, pack_path, result, db,
+                user_id=user_id,
+                as_of_time=resolved_as_of,
+            )
+            db.commit()
+        except Exception as exc:
+            # A flight moved/deleted mid-run surfaces as FlightGoneError so
+            # every caller (scheduler, trip, resume) records it as abandoned
+            # rather than failed; anything else propagates unchanged.
+            if isinstance(exc, FlightGoneError):
+                discard_refresh_for_gone_flight(flight_row.id, pack_path, exc)
+                raise
+            if discard_refresh_for_gone_flight(flight_row.id, pack_path, exc):
+                raise FlightGoneError(flight_row.id) from exc
+            raise
 
         # Inside the live window, the new pack's live layer before notifying
         # (#898). The preflight slot's flight-day brief refreshes it again
