@@ -94,8 +94,18 @@ class BriefingViewModel(
     private val _alternates = MutableStateFlow<AlternatesResponse?>(null)
     val alternates: StateFlow<AlternatesResponse?> = _alternates.asStateFlow()
 
+    /**
+     * The pack's timing-scenario scan (#893), filled by [startTimeOptionsPolling]; null hides the
+     * section (no data yet, Flexibility none, or a 404 for this pack).
+     */
     private val _timeOptions = MutableStateFlow<TimeOptionsResponse?>(null)
     val timeOptions: StateFlow<TimeOptionsResponse?> = _timeOptions.asStateFlow()
+
+    /** The poll gave up on network errors: the section shows a "needs a connection" line. */
+    private val _timeOptionsOffline = MutableStateFlow(false)
+    val timeOptionsOffline: StateFlow<Boolean> = _timeOptionsOffline.asStateFlow()
+
+    private var timeOptionsPollJob: Job? = null
 
     private val _debrief = MutableStateFlow<DebriefResponse?>(null)
     val debrief: StateFlow<DebriefResponse?> = _debrief.asStateFlow()
@@ -301,7 +311,6 @@ class BriefingViewModel(
         var elev: ElevationResponse? = null
         var fronts: RouteFrontsResponse? = null
         var alts: AlternatesResponse? = null
-        var times: TimeOptionsResponse? = null
         var deb: DebriefResponse? = null
         var live: LiveLayerResponse? = null
 
@@ -313,7 +322,6 @@ class BriefingViewModel(
             val elevD = async { runSuspendCatching { repository.elevation(flightId, ts) }.getOrNull() }
             val frontsD = async { runSuspendCatching { repository.routeFronts(flightId, ts) }.getOrNull() }
             val altsD = async { runSuspendCatching { repository.alternates(flightId, ts) }.getOrNull() }
-            val timesD = async { runSuspendCatching { repository.timeOptions(flightId) }.getOrNull() }
             val debD = async { runSuspendCatching { repository.debrief(flightId) }.getOrNull() }
             val liveD = async { runSuspendCatching { repository.liveLayer(flightId) }.getOrNull() }
 
@@ -324,7 +332,6 @@ class BriefingViewModel(
             elev = elevD.await()
             fronts = frontsD.await()
             alts = altsD.await() ?: adv?.alternates
-            times = timesD.await()
             deb = debD.await()
             live = liveD.await()
         }
@@ -351,7 +358,6 @@ class BriefingViewModel(
         _elevation.value = elev
         _routeFronts.value = fronts
         _alternates.value = alts
-        _timeOptions.value = times
         _debrief.value = deb
         _liveLayer.value = resolvedLive
 
@@ -369,6 +375,10 @@ class BriefingViewModel(
         _isOfflineCached.value = cachingRepo?.cache?.isPackCached(flightId, ts) ?: false
 
         reconcileTabs(openObserved = openObserved)
+
+        // Timing scenarios are a background job on the server reached only by polling (the
+        // refresh stream closes before the scan finishes). Reset drops the previous pack's scan.
+        startTimeOptionsPolling(ts, resetExisting = true)
     }
 
     /**
@@ -881,26 +891,139 @@ class BriefingViewModel(
         }
     }
 
+    // ========================================================================
+    // Timing scenarios (flexible departure), a port of the iOS flow (#893)
+    // ========================================================================
+
+    /** The flight's Flexibility now: the pack's served value, else the flight's own. */
+    private val effectiveFlexibility: FlightFlexibility?
+        get() = _selectedPack.value?.flexibility ?: _flight.value?.flexibility
+
+    /**
+     * (Re)start the poll for a pack, cancelling any running one so a pack switch or a re-poll
+     * after a confirm never runs two loops. [resetExisting] (a new pack) clears the old scan up
+     * front; a same-pack re-poll keeps the panel so its pending state doesn't flash away.
+     */
+    fun startTimeOptionsPolling(timestamp: String, resetExisting: Boolean = false) {
+        timeOptionsPollJob?.cancel()
+        if (resetExisting) {
+            _timeOptions.value = null
+            _timeOptionsOffline.value = false
+        }
+        if (effectiveFlexibility == FlightFlexibility.NONE) {
+            _timeOptions.value = null
+            _timeOptionsOffline.value = false
+            return
+        }
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        timeOptionsPollJob = scope.launch { pollTimeOptions(flightId, timestamp) }
+    }
+
+    fun stopTimeOptionsPolling() {
+        timeOptionsPollJob?.cancel()
+        timeOptionsPollJob = null
+    }
+
+    /**
+     * Poll `GET .../packs/{ts}/time-options` until a terminal status, with the iOS/web backoff
+     * (3 s, x1.5, capped at 15 s). Keeps going while the scan is pending/running or a candidate
+     * has a confirm in flight. A 404 means no data for this pack (hide the section). Up to 3
+     * transient errors in a row are tolerated so one blip can't blank a running scan.
+     */
+    private suspend fun pollTimeOptions(flightId: String, timestamp: String) {
+        var delayMs = TIME_OPTIONS_FIRST_DELAY_MS
+        var errorStreak = 0
+        var lastError: Throwable? = null
+        repeat(MAX_TIME_OPTIONS_POLLS) {
+            if (_selectedPack.value?.fetchTimestamp != timestamp) return
+            try {
+                val resp = repository.timeOptions(flightId, timestamp)
+                if (_selectedPack.value?.fetchTimestamp != timestamp) return
+                _timeOptions.value = resp
+                _timeOptionsOffline.value = false
+                errorStreak = 0
+                if (!resp.isNonTerminal) return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ApiError.NotFound) {
+                if (_selectedPack.value?.fetchTimestamp == timestamp) _timeOptions.value = null
+                return
+            } catch (e: Throwable) {
+                if (_selectedPack.value?.fetchTimestamp != timestamp) return
+                lastError = e
+                errorStreak++
+                if (errorStreak > MAX_TIME_OPTIONS_ERRORS) {
+                    abandonTimeOptionsPolling(lastError)
+                    return
+                }
+            }
+            delay(delayMs)
+            delayMs = minOf((delayMs * 3) / 2, TIME_OPTIONS_MAX_DELAY_MS)
+        }
+    }
+
+    /**
+     * Out of error budget. Clear the scan so a stale "this window looks smoother" can't linger
+     * with no sign it stopped updating; network failures show the offline line instead.
+     */
+    private fun abandonTimeOptionsPolling(lastError: Throwable?) {
+        if (lastError is ApiError.NetworkError) {
+            _timeOptionsOffline.value = true
+        } else {
+            _timeOptions.value = null
+        }
+    }
+
+    /** True while a candidate is being checked: the server runs one confirm at a time per pack. */
+    val anyTimeConfirmPending: Boolean
+        get() = _timeOptions.value?.anyConfirmPending == true
+
+    /**
+     * "Check all models" on a provisional candidate: queue the server's multi-model check (202),
+     * then re-poll so "checking all models…" appears and the result lands. A 429 (another check
+     * slipped in) is ignored, the poll shows the real state. Never moves the flight.
+     */
     fun confirmTimeOption(departureTime: String) {
         val flightId = currentFlightId ?: _flight.value?.id ?: return
+        val ts = _selectedPack.value?.fetchTimestamp ?: return
+        if (anyTimeConfirmPending) return
         scope.launch {
-            _isLoading.value = true
             try {
-                val updatedFlight = repository.confirmTimeOption(
-                    flightId,
-                    ConfirmTimeOptionRequest(
-                        departureTime = departureTime,
-                        lockToFixed = true,
-                        refreshNow = true,
-                    ),
-                )
-                _flight.value = updatedFlight
-                refreshBriefingInternal(flightId)
+                repository.confirmTimeOption(flightId, ts, departureTime)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ApiError.ServerError) {
+                if (e.statusCode != 429) {
+                    _errorMessage.value = e.message
+                    return@launch
+                }
             } catch (e: Throwable) {
-                _errorMessage.value = e.message ?: "Failed to confirm departure time"
-            } finally {
-                _isLoading.value = false
+                _errorMessage.value = e.message ?: "Failed to check this departure time"
+                return@launch
             }
+            startTimeOptionsPolling(ts)
+        }
+    }
+
+    /**
+     * "Set as alternate": PATCH only the flight's alternate departure time (its Flexibility
+     * stays), re-queue the scan so the pinned row is re-graded, then re-poll. Same as iOS.
+     */
+    fun setScenarioAsAlternate(departureTime: String) {
+        val flightId = currentFlightId ?: _flight.value?.id ?: return
+        val ts = _selectedPack.value?.fetchTimestamp ?: return
+        scope.launch {
+            try {
+                val updated = repository.updateFlight(flightId, UpdateFlightRequest(altDepartureTime = departureTime))
+                _flight.value = updated.flight
+                repository.rescanTimeOptions(flightId, ts)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                _errorMessage.value = e.message ?: "Failed to set the alternate time"
+                return@launch
+            }
+            startTimeOptionsPolling(ts)
         }
     }
 
@@ -981,6 +1104,13 @@ class BriefingViewModel(
 
         const val ACTIVE_REFRESH_POLL_MS = 3_000L
         const val ACTIVE_REFRESH_MAX_POLLS = 100
+
+        // Timing-scenario poll (iOS `pollTimeOptions`): 3 s, x1.5, capped at 15 s; the 80-poll cap
+        // (~18 min) is a backstop, a terminal status is the normal exit.
+        const val TIME_OPTIONS_FIRST_DELAY_MS = 3_000L
+        const val TIME_OPTIONS_MAX_DELAY_MS = 15_000L
+        const val MAX_TIME_OPTIONS_POLLS = 80
+        const val MAX_TIME_OPTIONS_ERRORS = 3
 
         /** Refresh banner text, shared by the SSE stream and the status poll. */
         fun refreshProgressLabel(stage: String?, detail: String?, progress: Double?): String {

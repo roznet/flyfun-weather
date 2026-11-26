@@ -375,14 +375,15 @@ class CachingBriefingRepository(
     override fun refreshPack(flightId: String, force: Boolean, notifyEmail: Boolean): Flow<RefreshEvent> =
         online.refreshPack(flightId, force, notifyEmail)
 
-    override suspend fun timeOptions(flightId: String): TimeOptionsResponse =
-        online.timeOptions(flightId)
+    // Online only (like iOS): the scan is live server state, never cached with the pack.
+    override suspend fun timeOptions(flightId: String, timestamp: String): TimeOptionsResponse =
+        online.timeOptions(flightId, timestamp)
 
-    override suspend fun triggerTimeScan(flightId: String): TimeScanStatusDTO =
-        online.triggerTimeScan(flightId)
+    override suspend fun rescanTimeOptions(flightId: String, timestamp: String) =
+        online.rescanTimeOptions(flightId, timestamp)
 
-    override suspend fun confirmTimeOption(flightId: String, req: ConfirmTimeOptionRequest): FlightResponse =
-        online.confirmTimeOption(flightId, req)
+    override suspend fun confirmTimeOption(flightId: String, timestamp: String, departureTime: String) =
+        online.confirmTimeOption(flightId, timestamp, departureTime)
 
     override suspend fun observedStatus(): ObservedImageryStatusResponse =
         online.observedStatus()

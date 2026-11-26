@@ -62,27 +62,6 @@ enum class FlightNotifyOverride(val wireValue: String) {
     OFF("off"),
 }
 
-@Serializable
-enum class FlexibilityMode(val wireValue: String, val label: String) {
-    @SerialName("fixed")
-    FIXED("fixed", "Fixed"),
-
-    @SerialName("day")
-    DAY("day", "Same day"),
-
-    @SerialName("multi_day")
-    MULTI_DAY("multi_day", "Multi-day");
-
-    val title: String
-        get() = label
-
-    fun daysLabel(days: Int): String = when (this) {
-        FIXED -> "Fixed"
-        DAY -> "Same day"
-        MULTI_DAY -> "$days days"
-    }
-}
-
 /**
  * The flight's timing-scenario mode, as the server stores it (`FlightResponse.flexibility`).
  * Mirrors iOS `FlexibilityMode`. Unknown values decode to [NONE] (see the serializer) so a

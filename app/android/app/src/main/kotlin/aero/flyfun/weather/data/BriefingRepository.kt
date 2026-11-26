@@ -71,10 +71,11 @@ interface BriefingRepository {
     suspend fun activeRefreshes(): Map<String, ActiveRefreshResponse>
     fun refreshPack(flightId: String, force: Boolean = false, notifyEmail: Boolean = false): Flow<RefreshEvent>
 
-    // Time options (flexible departure)
-    suspend fun timeOptions(flightId: String): TimeOptionsResponse
-    suspend fun triggerTimeScan(flightId: String): TimeScanStatusDTO
-    suspend fun confirmTimeOption(flightId: String, req: ConfirmTimeOptionRequest): FlightResponse
+    // Timing scenarios (flexible departure): per briefing pack. Rescan and confirm only queue
+    // the work (202); poll [timeOptions] for the result.
+    suspend fun timeOptions(flightId: String, timestamp: String): TimeOptionsResponse
+    suspend fun rescanTimeOptions(flightId: String, timestamp: String)
+    suspend fun confirmTimeOption(flightId: String, timestamp: String, departureTime: String)
 
     // Observed imagery (radar / cloud tops / lightning / storm cells)
     suspend fun observedStatus(): ObservedImageryStatusResponse
@@ -254,14 +255,14 @@ open class OnlineBriefingRepository(
     override fun refreshPack(flightId: String, force: Boolean, notifyEmail: Boolean): Flow<RefreshEvent> =
         api.refreshPackStream(flightId, force = force, notifyEmail = notifyEmail)
 
-    override suspend fun timeOptions(flightId: String): TimeOptionsResponse =
-        api.getTimeOptions(flightId)
+    override suspend fun timeOptions(flightId: String, timestamp: String): TimeOptionsResponse =
+        api.getTimeOptions(flightId, timestamp)
 
-    override suspend fun triggerTimeScan(flightId: String): TimeScanStatusDTO =
-        api.triggerTimeScan(flightId)
+    override suspend fun rescanTimeOptions(flightId: String, timestamp: String) =
+        api.rescanTimeOptions(flightId, timestamp)
 
-    override suspend fun confirmTimeOption(flightId: String, req: ConfirmTimeOptionRequest): FlightResponse =
-        api.confirmTimeOption(flightId, req)
+    override suspend fun confirmTimeOption(flightId: String, timestamp: String, departureTime: String) =
+        api.confirmTimeOption(flightId, timestamp, ConfirmTimeOptionRequest(departureTime = departureTime))
 
     override suspend fun observedStatus(): ObservedImageryStatusResponse =
         api.getObservedStatus()

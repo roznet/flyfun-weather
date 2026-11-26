@@ -569,14 +569,23 @@ class ApiClient(
     // Flexible Departure / Time Options
     // ========================================================================
 
-    suspend fun getTimeOptions(flightId: String): TimeOptionsResponse =
-        get("/api/flights/${encodePathSegment(flightId)}/time-options")
+    // Per briefing pack, like iOS `BriefingRepository.timeOptions` (#893). The scan and the
+    // confirm run on the server's background queue: rescan and confirm answer 202 at once and
+    // the client polls `getTimeOptions` for the result.
 
-    suspend fun triggerTimeScan(flightId: String): TimeScanStatusDTO =
-        postNoBody("/api/flights/${encodePathSegment(flightId)}/time-options/scan")
+    suspend fun getTimeOptions(flightId: String, timestamp: String): TimeOptionsResponse =
+        get("/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/time-options")
 
-    suspend fun confirmTimeOption(flightId: String, req: ConfirmTimeOptionRequest): FlightResponse =
-        post("/api/flights/${encodePathSegment(flightId)}/time-options/confirm", req)
+    suspend fun rescanTimeOptions(flightId: String, timestamp: String) {
+        postEmpty("/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/time-options/rescan")
+    }
+
+    suspend fun confirmTimeOption(flightId: String, timestamp: String, req: ConfirmTimeOptionRequest) {
+        postIgnoreResponse(
+            "/api/flights/${encodePathSegment(flightId)}/packs/${encodePathSegment(timestamp)}/time-options/confirm",
+            req,
+        )
+    }
 
     // ========================================================================
     // Observed Imagery (Radar / Cloud Tops / Lightning / Cells)

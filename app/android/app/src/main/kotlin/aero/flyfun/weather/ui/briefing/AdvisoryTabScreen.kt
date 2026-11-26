@@ -89,8 +89,9 @@ import aero.flyfun.weather.model.RegAlternateTrigger
 import aero.flyfun.weather.model.RouteAdvisoryResult
 import aero.flyfun.weather.model.TimeCandidate
 import aero.flyfun.weather.model.TimeOptionsResponse
-import aero.flyfun.weather.model.TimeScanJobStatus
+import aero.flyfun.weather.model.TimeWindowScanDTO
 import aero.flyfun.weather.model.rules.DebriefSectionRules
+import aero.flyfun.weather.model.rules.TimingScenarioRules
 import aero.flyfun.weather.viewmodel.BriefingViewModel
 import java.util.Locale
 import kotlin.math.abs
@@ -116,6 +117,7 @@ fun AdvisoryTabScreen(
     val digest by viewModel.digest.collectAsState()
     val alternatesState by viewModel.alternates.collectAsState()
     val timeOptions by viewModel.timeOptions.collectAsState()
+    val timeOptionsOffline by viewModel.timeOptionsOffline.collectAsState()
     val debrief by viewModel.debrief.collectAsState()
     val debriefReport by viewModel.debriefReport.collectAsState()
     val liveLayer by viewModel.liveLayer.collectAsState()
@@ -127,7 +129,7 @@ fun AdvisoryTabScreen(
     val hasAirports = advisories?.airportConditions != null
     val hasAlternates = effectiveAlternates != null &&
         (effectiveAlternates.candidates.isNotEmpty() || effectiveAlternates.requirement != null)
-    val hasTiming = timeOptions != null
+    val hasTiming = timeOptions != null || timeOptionsOffline
     val watchItems = digest?.watchItems?.filter { it.isNotBlank() }.orEmpty()
     val hasWatch = watchItems.isNotEmpty()
     val showsObservedTeaser = BriefingTab.OBSERVED in availableTabs || liveLayer != null
@@ -261,14 +263,15 @@ fun AdvisoryTabScreen(
             // 5. Timing Scenarios section
             if (hasTiming) {
                 item(key = "timing") {
-                    timeOptions?.let { options ->
-                        TimingScenariosSection(
-                            timeOptions = options,
-                            catalog = advisories?.catalog.orEmpty(),
-                            isEditable = flight?.isEditable ?: true,
-                            onConfirmTimeOption = { depTime -> viewModel.confirmTimeOption(depTime) },
-                        )
-                    }
+                    TimingScenariosSection(
+                        timeOptions = timeOptions,
+                        offline = timeOptionsOffline,
+                        catalog = advisories?.catalog.orEmpty(),
+                        // Owner-only actions: unknown flight means no buttons, not all of them.
+                        isEditable = flight?.isEditable == true,
+                        onConfirmTimeOption = { depTime -> viewModel.confirmTimeOption(depTime) },
+                        onSetAsAlternate = { depTime -> viewModel.setScenarioAsAlternate(depTime) },
+                    )
                 }
             }
 
@@ -1552,17 +1555,23 @@ private fun OperationalFlagChip(flag: OperationalFlag) {
 // Timing Scenarios Section
 // ============================================================================
 
+/**
+ * The Timing Scenarios section (#357, Android port #893 of iOS `TimingScenariosView`): "is
+ * there a smoother departure time?" An attention-director, never a verdict: rows carry the
+ * server's model-coverage labels and nothing here moves the flight. Wording lives in
+ * [TimingScenarioRules].
+ */
 @Composable
 internal fun TimingScenariosSection(
-    timeOptions: TimeOptionsResponse,
+    timeOptions: TimeOptionsResponse?,
+    offline: Boolean,
     catalog: List<AdvisoryCatalogEntry>,
     isEditable: Boolean,
     onConfirmTimeOption: (String) -> Unit,
+    onSetAsAlternate: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val catalogNames = remember(catalog) {
-        catalog.associate { it.id to it.name }
-    }
+    val catalogNames = remember(catalog) { catalog.associate { it.id to it.name } }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -1574,78 +1583,45 @@ internal fun TimingScenariosSection(
             fontWeight = FontWeight.Bold,
         )
 
-        if (timeOptions.confirmation.show && timeOptions.confirmation.headline.isNotBlank()) {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = timeOptions.confirmation.headline,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    if (timeOptions.confirmation.detail.isNotBlank()) {
-                        Text(
-                            text = timeOptions.confirmation.detail,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
+        if (offline || timeOptions == null) {
+            TimingMutedText(TimingScenarioRules.OFFLINE_TEXT)
+            return@Column
         }
 
-        when (timeOptions.status.status) {
-            TimeScanJobStatus.PENDING, TimeScanJobStatus.RUNNING -> {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Text(
-                        text = "Scanning departure time windows against this briefing…",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        when (val state = TimingScenarioRules.panelState(timeOptions)) {
+            TimingScenarioRules.PanelState.Running -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                TimingMutedText(TimingScenarioRules.RUNNING_TEXT)
+            }
+            TimingScenarioRules.PanelState.Failed -> TimingMutedText(TimingScenarioRules.FAILED_TEXT)
+            is TimingScenarioRules.PanelState.Skipped -> TimingMutedText(state.message)
+            is TimingScenarioRules.PanelState.Results -> {
+                val scan = state.scan
+                Text(
+                    text = TimingScenarioRules.headline(scan),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                val anyPending = timeOptions.anyConfirmPending
+                scan.candidates.forEach { candidate ->
+                    TimingCandidateCard(
+                        candidate = candidate,
+                        scan = scan,
+                        catalogNames = catalogNames,
+                        isEditable = isEditable,
+                        anyConfirmPending = anyPending,
+                        onConfirm = { onConfirmTimeOption(candidate.departureTime) },
+                        onSetAsAlternate = { onSetAsAlternate(candidate.departureTime) },
                     )
                 }
-            }
-            TimeScanJobStatus.FAILED -> {
-                Text(
-                    text = timeOptions.status.error ?: "Timing scenario scan failed.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            TimeScanJobStatus.READY -> {
-                val scan = timeOptions.scan
-                if (scan == null || scan.candidates.isEmpty()) {
+                TimingScenarioRules.footnotes(scan).forEach { note ->
                     Text(
-                        text = timeOptions.status.summary ?: "No alternative departure candidates available.",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = note,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                } else {
-                    if (scan.summary.isNotBlank()) {
-                        Text(
-                            text = scan.summary,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    scan.candidates.forEach { candidate ->
-                        TimingCandidateCard(
-                            candidate = candidate,
-                            isRecommended = candidate.departureTime == scan.recommendedDepartureTime,
-                            catalogNames = catalogNames,
-                            isEditable = isEditable,
-                            onConfirm = { onConfirmTimeOption(candidate.departureTime) },
-                        )
-                    }
                 }
             }
         }
@@ -1653,24 +1629,34 @@ internal fun TimingScenariosSection(
 }
 
 @Composable
+private fun TimingMutedText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
 private fun TimingCandidateCard(
     candidate: TimeCandidate,
-    isRecommended: Boolean,
+    scan: TimeWindowScanDTO,
     catalogNames: Map<String, String>,
     isEditable: Boolean,
+    anyConfirmPending: Boolean,
     onConfirm: () -> Unit,
+    onSetAsAlternate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var expanded by rememberSaveable(candidate.departureTime) { mutableStateOf(false) }
+
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
         ),
-        border = BorderStroke(
-            width = if (isRecommended) 1.dp else 0.5.dp,
-            color = if (isRecommended) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-        ),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
             modifier = Modifier
@@ -1683,78 +1669,165 @@ private fun TimingCandidateCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = formatUtcTimestamp(candidate.departureTime),
+                    text = TimingScenarioRules.timeLabel(candidate, scan),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                 )
-                AssessmentPillBadge(assessment = candidate.resolvedAssessment)
-                if (candidate.isCurrent) {
+                AssessmentPillBadge(assessment = candidate.effectiveAssessment)
+                Text(
+                    text = TimingScenarioRules.shiftLabel(candidate),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (candidate.isAlternate) {
                     Text(
-                        text = "Planned",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                } else if (isRecommended) {
-                    Text(
-                        text = "★ Recommended",
+                        text = "★ your alternate",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-                Spacer(modifier = Modifier.weight(1f))
+            }
+
+            val diff = TimingScenarioRules.diffText(candidate, catalogNames)
+            if (diff.isNotEmpty()) {
+                Text(text = diff, style = MaterialTheme.typography.bodySmall)
+            }
+
+            val confidence = TimingScenarioRules.confidenceText(candidate)
+            if (confidence != null) {
                 Text(
-                    text = "${candidate.advisorySummary.red}R · ${candidate.advisorySummary.amber}A · ${candidate.advisorySummary.green}G",
+                    text = confidence,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-
-            if (candidate.prosVsCurrent.isNotEmpty()) {
-                Text(
-                    text = "Improves: " + candidate.prosVsCurrent.joinToString(", ") { catalogNames[it] ?: it },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = BriefingPalette.Green,
-                )
-            }
-            if (candidate.consVsCurrent.isNotEmpty()) {
-                Text(
-                    text = "Worsens: " + candidate.consVsCurrent.joinToString(", ") { catalogNames[it] ?: it },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = BriefingPalette.Amber,
-                )
-            }
-
-            val modelsLabel = if (candidate.modelsAvailable.isNotEmpty()) {
-                "Models: " + candidate.modelsAvailable.joinToString(", ") { it.shortModelName() }
             } else {
-                null
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                    Text(
+                        text = TimingScenarioRules.CHECKING_TEXT,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth(),
+
+            // Owner-only actions; both wait while any check runs (one per pack on the server).
+            val showConfirm = isEditable && TimingScenarioRules.showsConfirmButton(candidate)
+            val showAlternate = isEditable && TimingScenarioRules.showsSetAlternateButton(candidate, scan)
+            if (showConfirm || showAlternate) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (showConfirm) {
+                        OutlinedButton(
+                            onClick = onConfirm,
+                            enabled = !anyConfirmPending,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        ) {
+                            Text(text = "Check all models", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    if (showAlternate) {
+                        OutlinedButton(
+                            onClick = onSetAsAlternate,
+                            enabled = !anyConfirmPending,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        ) {
+                            Text(text = "Set as alternate", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+
+            TextButton(
+                onClick = { expanded = !expanded },
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
             ) {
                 Text(
-                    text = modelsLabel ?: candidate.note.orEmpty(),
+                    text = if (expanded) "hide details" else "details",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
                 )
-                if (isEditable && !candidate.isCurrent) {
-                    OutlinedButton(
-                        onClick = onConfirm,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    ) {
-                        Text(
-                            text = "Confirm multi-model",
-                            style = MaterialTheme.typography.labelSmall,
-                        )
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                TimingDetailTable(candidate = candidate, scan = scan, names = catalogNames)
+            }
+        }
+    }
+}
+
+/** Per-advisory dots: Current vs this row's grade vs the confirmed check, worst first. */
+@Composable
+private fun TimingDetailTable(
+    candidate: TimeCandidate,
+    scan: TimeWindowScanDTO,
+    names: Map<String, String>,
+) {
+    val columns = remember(candidate, scan) { TimingScenarioRules.detailColumns(candidate, scan) }
+    val rowIds = remember(columns, names) { TimingScenarioRules.detailRowIds(columns, names) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (rowIds.isEmpty()) {
+            TimingMutedText("All advisories clear at every checked view.")
+        } else {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Spacer(modifier = Modifier.weight(1f))
+                columns.forEach { col ->
+                    Text(
+                        text = col.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(76.dp),
+                    )
+                }
+            }
+            rowIds.forEach { id ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = names[id] ?: id,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    columns.forEach { col ->
+                        // Absent means nothing flagged for that view; an unknown status stays grey,
+                        // never green (#392: we could not grade it is not "clear").
+                        val status = col.statuses[id] ?: "GREEN"
+                        val color = when (status) {
+                            "RED" -> BriefingPalette.Red
+                            "AMBER" -> BriefingPalette.Amber
+                            "GREEN" -> BriefingPalette.Green
+                            else -> BriefingPalette.Unavailable
+                        }
+                        Box(modifier = Modifier.width(76.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(color),
+                            )
+                        }
                     }
                 }
             }
         }
+        Text(
+            text = TimingScenarioRules.gradedFootnote(candidate),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
