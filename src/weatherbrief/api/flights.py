@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date as date_t, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -1918,6 +1918,41 @@ def get_frequent_airports(
     Add-Flight prefill. See ``compute_frequent_airports``.
     """
     return compute_frequent_airports(db, user_id)
+
+
+@router.get("/archive")
+def get_flight_archive(
+    q: str | None = Query(default=None, max_length=MAX_QUERY_LEN),
+    tags: str | None = Query(default=None, max_length=64),
+    source: Literal["forecast", "reported"] = Query(default="forecast"),
+    outcome: str | None = Query(default=None, max_length=64),
+    hide: str | None = Query(default=None, max_length=64),
+    date_from: date_t | None = Query(default=None, alias="from"),
+    date_to: date_t | None = Query(default=None, alias="to"),
+    view: Literal["list", "calendar", "map"] = Query(default="list"),
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user_id: str = Depends(current_user_id),
+    db: Session = Depends(get_db, scope="function"),
+) -> dict:
+    """Past-flights finder (#1031): the owner's Past flights filtered by
+    route, hazard tags, outcome and date, as a list, a calendar or a map,
+    with the facet counts every chip shows. Subscribed flights never appear.
+    See ``api/flight_archive`` for the filter and facet rules."""
+    from weatherbrief.api.flight_archive import OUTCOMES, build_archive, parse_csv
+    from weatherbrief.storage.flight_facts import ARCHIVE_TAGS
+
+    try:
+        tag_list = parse_csv(tags, ARCHIVE_TAGS, "tags")
+        outcome_list = parse_csv(outcome, OUTCOMES, "outcome")
+        hide_list = parse_csv(hide, OUTCOMES, "hide")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return build_archive(
+        db, user_id, q=q, tags=tag_list, source=source, outcome=outcome_list, hide=hide_list,
+        date_from=date_from, date_to=date_to, view=view, year=year, limit=limit, offset=offset,
+    )
 
 
 @router.get("/by-share/{code}", response_model=FlightResponse)

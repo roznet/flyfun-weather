@@ -194,6 +194,12 @@ def close_flight(db: Session, flight: FlightRow, progress, now: datetime) -> Fli
     )
     db.add(row)
     db.commit()
+    # Past-flights record (#1031): freeze the forecast tags on the default
+    # pack and record the report's outcome. Never fails the close.
+    from weatherbrief.storage.flight_facts import safe_update_flight_facts
+
+    safe_update_flight_facts(db, flight.id, now=now, freeze=True)
+    db.commit()
     if reason is not None:
         logger.info("DEBRIEF_PUSH_SKIPPED flight=%s user=%s reason=%s", flight.id, flight.user_id, reason)
         return row

@@ -2310,6 +2310,12 @@ def _persist_pack_finalize(
         )
         save_pack_meta(db, meta)
 
+    # Past-flights record (#1031): route and forecast tags follow each new
+    # pack until the departure. Never fails the finalize.
+    from weatherbrief.storage.flight_facts import safe_update_flight_facts
+
+    safe_update_flight_facts(db, flight_id)
+
     # Log usage and charge credits
     from weatherbrief.api.usage import log_api_usage, log_briefing_usage
 
