@@ -20,6 +20,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.serializer
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -107,7 +108,17 @@ class ApiClient(
         bodyBytes: ByteArray? = null,
         contentType: String = "application/json; charset=utf-8",
         headers: Map<String, String> = emptyMap(),
-    ): ByteArray = withContext(Dispatchers.IO) {
+    ): ByteArray = requestRawWithHeaders(path, method, queryItems, bodyBytes, contentType, headers).first
+
+    /** [requestRaw] plus the response headers (e.g. `X-Past-Total` on the flight list). */
+    suspend fun requestRawWithHeaders(
+        path: String,
+        method: String = "GET",
+        queryItems: List<Pair<String, String>> = emptyList(),
+        bodyBytes: ByteArray? = null,
+        contentType: String = "application/json; charset=utf-8",
+        headers: Map<String, String> = emptyMap(),
+    ): Pair<ByteArray, Headers> = withContext(Dispatchers.IO) {
         val url = buildUrl(path, queryItems)
         val requestBuilder = Request.Builder().url(url)
         for ((k, v) in headers) {
@@ -137,7 +148,7 @@ class ApiClient(
                 throw ApiError.NetworkError(e)
             }
             validateStatus(resp.code, bytes)
-            bytes
+            bytes to resp.headers
         }
     }
 
@@ -304,6 +315,21 @@ class ApiClient(
     // ========================================================================
 
     suspend fun listFlights(): List<FlightResponse> = get("/api/flights")
+
+    /** The list with past capped at [pastLimit], plus the full past count (`X-Past-Total`). */
+    suspend fun listFlightsPage(pastLimit: Int): FlightListPage {
+        val (bytes, headers) = requestRawWithHeaders(
+            "/api/flights", queryItems = listOf("past_limit" to pastLimit.toString()),
+        )
+        val flights = try {
+            json.decodeFromString(
+                json.serializersModule.serializer<List<FlightResponse>>(), bytes.toString(Charsets.UTF_8),
+            )
+        } catch (e: Exception) {
+            throw ApiError.DecodingError(e)
+        }
+        return FlightListPage(flights, headers["X-Past-Total"]?.toIntOrNull())
+    }
 
     suspend fun getFlight(id: String): FlightResponse = get("/api/flights/${encodePathSegment(id)}")
 

@@ -65,6 +65,31 @@ class CachingBriefingRepository(
         }
     }
 
+    /** The capped list, cached like [listFlights]; offline, the cached list with no past total. */
+    override suspend fun listFlightsPage(pastLimit: Int): FlightListPage {
+        if (isOnline()) {
+            try {
+                val page = online.listFlightsPage(pastLimit)
+                cacheFlightList(page.flights)
+                lastFetchWasCached = false
+                return page
+            } catch (e: Throwable) {
+                if (!isTransientNetworkFailure(e)) throw e
+                readCachedFlightList()?.let {
+                    lastFetchWasCached = true
+                    return FlightListPage(it, null)
+                }
+                throw e
+            }
+        } else {
+            readCachedFlightList()?.let {
+                lastFetchWasCached = true
+                return FlightListPage(it, null)
+            }
+            throw ApiError.OfflineNotCached()
+        }
+    }
+
     override suspend fun getFlight(id: String): FlightResponse {
         if (isOnline()) {
             try {

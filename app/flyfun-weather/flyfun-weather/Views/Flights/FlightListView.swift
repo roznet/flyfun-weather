@@ -94,7 +94,7 @@ struct FlightListView: View {
     @State private var pastOpenError: String?
 
     /// Past flights shown in the main list before "See all".
-    static let pastTeaserCount = 3
+    static let pastTeaserCount = FlightListViewModel.pastLimit
     /// iPad sidebar saved filters (#1030).
     struct PastSavedFilter: Hashable {
         let label: String
@@ -166,7 +166,7 @@ struct FlightListView: View {
                                         } header: {
                                             HStack {
                                                 Text("Past")
-                                                Text("\(group.flights.count)")
+                                                Text("\(viewModel.pastTotal ?? group.flights.count)")
                                                     .foregroundStyle(.secondary)
                                                 Spacer()
                                                 Button("See all") { pastScreen = .all }
@@ -426,10 +426,9 @@ struct FlightListView: View {
                 TripDetailView(
                     tripId: tripId,
                     onOpenLeg: { flightId in
-                        if case .loaded(let flights) = viewModel?.state,
-                           let match = flights.first(where: { $0.id == flightId }) {
-                            selection = .flight(match)
-                        }
+                        // A past leg may not be in the list (it loads only the
+                        // newest past flights): fetched by id then.
+                        if let viewModel { openPastFlight(flightId, viewModel: viewModel) }
                     },
                     onClose: {
                         // The trip is gone — deleted, or pruned with its last
@@ -975,9 +974,9 @@ struct FlightListView: View {
         }
     }
 
-    /// Open a Past-screen row's briefing: the same selection a list tap makes.
-    /// iOS loads every owned flight (no `past_limit`), so the row is normally
-    /// in the list; otherwise it is fetched by id.
+    /// Open a Past-screen row's (or a trip leg's) briefing: the same selection a
+    /// list tap makes. The list holds only the newest past flights
+    /// (`FlightListViewModel.pastLimit`), so an older one is fetched by id.
     private func openPastFlight(_ id: String, viewModel: FlightListViewModel) {
         if case .loaded(let flights) = viewModel.state,
            let flight = flights.first(where: { $0.id == id }) {

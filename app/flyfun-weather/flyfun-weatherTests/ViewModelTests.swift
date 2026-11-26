@@ -981,6 +981,19 @@ import MapKit
         #expect(repo.flightsCallCount == 1)
     }
 
+    @Test func loadAsksForTheTeaserAndKeepsThePastTotal() async {
+        let repo = MockBriefingRepository()
+        repo.flightsResult = .success([makeFlight(id: "a")])
+        repo.pastTotalResult = 42
+        let vm = FlightListViewModel(repository: repo)
+
+        await vm.loadFlights()
+
+        #expect(repo.flightListPastLimits == [FlightListViewModel.pastLimit])
+        #expect(FlightListViewModel.pastLimit == FlightListView.pastTeaserCount)
+        #expect(vm.pastTotal == 42)
+    }
+
     @Test func loadFailureTransitionsToError() async {
         let repo = MockBriefingRepository()
         repo.flightsResult = .failure(MockError.injected("server down"))

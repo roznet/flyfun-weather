@@ -10,8 +10,21 @@ enum RefreshSource: String, Sendable {
 }
 
 /// Abstraction over briefing data access.
+/// The flight list with its past section capped: every future and recent
+/// flight, the newest `pastLimit` past ones, and the full past count
+/// (`X-Past-Total`; nil when the source can't say, e.g. an offline cache).
+struct FlightListPage: Sendable {
+    let flights: [FlightResponse]
+    let pastTotal: Int?
+}
+
 protocol BriefingRepository: Sendable {
+    /// Every flight, past ones included. For callers that need all of them
+    /// (Siri's flight lookup, recent routes); the list screen uses `flightList`.
     func flights() async throws -> [FlightResponse]
+    /// The list screen's load: past capped at `pastLimit` (the Past screen pages
+    /// the rest from the archive), so a refresh doesn't download the history.
+    func flightList(pastLimit: Int) async throws -> FlightListPage
     /// Fetch one flight by id, independent of the viewer's list. Backs the
     /// `briefing.html?flight=<id>` Universal Link fallback for flights that
     /// aren't in the list (e.g. a feedback email about another pilot's flight):
@@ -247,6 +260,13 @@ extension BriefingRepository {
 }
 
 /// Online-only implementation — every call hits the API.
+extension BriefingRepository {
+    /// Sources with no capped list (fixtures, test mocks) serve the full one.
+    func flightList(pastLimit: Int) async throws -> FlightListPage {
+        FlightListPage(flights: try await flights(), pastTotal: nil)
+    }
+}
+
 final class OnlineBriefingRepository: BriefingRepository {
     private let client: APIClient
 
@@ -256,6 +276,13 @@ final class OnlineBriefingRepository: BriefingRepository {
 
     func flights() async throws -> [FlightResponse] {
         try await client.request("/api/flights")
+    }
+
+    func flightList(pastLimit: Int) async throws -> FlightListPage {
+        let (flights, http): ([FlightResponse], HTTPURLResponse) =
+            try await client.requestURLWithResponse("/api/flights?past_limit=\(pastLimit)")
+        let total = http.value(forHTTPHeaderField: "X-Past-Total").flatMap { Int($0) }
+        return FlightListPage(flights: flights, pastTotal: total)
     }
 
     func flight(id: String) async throws -> FlightResponse {

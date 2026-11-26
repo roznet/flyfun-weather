@@ -5,13 +5,28 @@ import aero.flyfun.weather.model.rules.LatLonBox
 import kotlinx.coroutines.flow.Flow
 
 /**
+ * The flight list with its past section capped: every future and recent flight, the newest
+ * `pastLimit` past ones, and the full past count (`X-Past-Total`; null when the source can't
+ * say, e.g. the offline cache).
+ */
+data class FlightListPage(val flights: List<FlightResponse>, val pastTotal: Int?)
+
+/**
  * Abstraction for flight and briefing data access.
  * Mirrors `BriefingRepository` on iOS, enabling transparent offline caching
  * ([CachingBriefingRepository]) and deterministic UI-test fixtures ([FixtureBriefingRepository]).
  */
 interface BriefingRepository {
     // Flights
+    /** Every flight, past ones included; the list screen uses [listFlightsPage]. */
     suspend fun listFlights(): List<FlightResponse>
+
+    /**
+     * The list screen's load: past capped at [pastLimit] (the Past screen pages the rest from
+     * the archive), so a refresh doesn't download the history. Sources without a capped list
+     * (fixtures) serve the full one.
+     */
+    suspend fun listFlightsPage(pastLimit: Int): FlightListPage = FlightListPage(listFlights(), null)
     suspend fun getFlight(id: String): FlightResponse
     suspend fun createFlight(req: CreateFlightRequest): FlightResponse
     suspend fun updateFlight(id: String, req: UpdateFlightRequest): UpdateFlightResponse
@@ -136,6 +151,8 @@ open class OnlineBriefingRepository(
 ) : BriefingRepository {
 
     override suspend fun listFlights(): List<FlightResponse> = api.listFlights()
+
+    override suspend fun listFlightsPage(pastLimit: Int): FlightListPage = api.listFlightsPage(pastLimit)
 
     override suspend fun getFlight(id: String): FlightResponse = api.getFlight(id)
 

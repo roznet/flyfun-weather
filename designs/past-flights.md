@@ -96,12 +96,23 @@ month come from the server's order.
 - iOS: the list keeps a teaser of the latest 3 Past flights plus "See all",
   which pushes `PastFlightsView` (`.searchable`, chips, month sections).
   iPad adds saved filters (All past, With icing, With convection, Cancelled,
-  Debriefed) under the teaser. A row opens the briefing through the list's
-  selection (fetched by id if it is not loaded).
+  Debriefed) under the teaser. A row (or a trip leg) opens the briefing
+  through the list's selection, fetched by id when it is not loaded.
 - Android: same teaser + "See all" to `PastFlightsScreen`. The list's
   in-app search no longer filters Past; with a search on, the button reads
   "Search past" and opens the screen with that query. Back from a briefing
   opened there returns to the Past screen (phone).
+- Both apps load the list with `past_limit=3` (`flightList(pastLimit:)` /
+  `listFlightsPage`), only the teaser's rows, and show `X-Past-Total` as the
+  Past count (offline: the cached rows' count). The list cache therefore
+  holds every future and recent flight but only 3 past ones. Callers that
+  need every flight keep the full `flights()` / `listFlights()`: Siri's
+  flight lookup and the intents, iOS recent routes. iOS Spotlight is
+  reindexed from the list load, so it indexes only those 3 past flights.
+
+`GET /api/flights` sections, filters (`past_q`) and slices on the bare rows
+and builds the full response (latest pack, aircraft, report flags) only for
+the flights it returns, so `past_limit=0` / `3` don't pay for the history.
 
 ## Gotchas
 

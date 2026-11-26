@@ -150,6 +150,15 @@ final class MockBriefingRepository: BriefingRepository, @unchecked Sendable {
         if let hook = beforeFlightsReturn { await hook() }
         return try flightsResult.get()
     }
+
+    /// `X-Past-Total` the capped list reports; the limits it was asked for.
+    var pastTotalResult: Int?
+    private(set) var flightListPastLimits: [Int] = []
+
+    func flightList(pastLimit: Int) async throws -> FlightListPage {
+        flightListPastLimits.append(pastLimit)
+        return FlightListPage(flights: try await flights(), pastTotal: pastTotalResult)
+    }
     func flight(id: String) async throws -> FlightResponse {
         guard let match = try flightsResult.get().first(where: { $0.id == id }) else {
             throw APIError.notFound

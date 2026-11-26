@@ -24,6 +24,13 @@ extension LoadingState {
 @MainActor
 final class FlightListViewModel {
     private(set) var state: LoadingState<[FlightResponse]> = .idle
+    /// Every past flight the server holds (`X-Past-Total`); the list itself
+    /// carries only the newest `pastLimit`. Nil offline or from a source that
+    /// can't say: the Past header then counts the rows it has.
+    private(set) var pastTotal: Int?
+    /// Past flights the list loads: the teaser's rows (`FlightListView.pastTeaserCount`).
+    /// The Past screen pages the rest from the archive (#1032).
+    static let pastLimit = 3
     /// True while a refresh runs *over an already-loaded list* — drives a subtle
     /// in-place indicator instead of replacing the list with a spinner (#1).
     private(set) var isRefreshing = false
@@ -115,7 +122,8 @@ final class FlightListViewModel {
         }
         do {
             let generation = loadGeneration
-            let flights = try await repository.flights()
+            let page = try await repository.flightList(pastLimit: Self.pastLimit)
+            let flights = page.flights
             // Mirror `reconcileLatestPacks()`'s guard in the other direction: if a
             // reconcile (or any authoritative commit) landed a strictly newer list
             // while our fetch was suspended, its data is at least as fresh as ours —
@@ -135,6 +143,7 @@ final class FlightListViewModel {
             let reporter = repository as? CacheStatusReporting
             if let reporter { isOffline = reporter.isServingCachedFlights }
             state = .loaded(flights)
+            pastTotal = page.pastTotal
             lastPackTimestamps = Self.packTimestampMap(flights)
             loadGeneration &+= 1   // authoritative commit — see reconcileLatestPacks
             if let reporter { await refreshCachedFlightIds(reporter) }
@@ -312,7 +321,8 @@ final class FlightListViewModel {
     @discardableResult
     func reconcileLatestPacks() async -> Bool {
         let generation = loadGeneration
-        guard let flights = try? await repository.flights() else { return false }
+        guard let page = try? await repository.flightList(pastLimit: Self.pastLimit) else { return false }
+        let flights = page.flights
         // An authoritative load (pull-to-refresh, foreground, external sync, the
         // completion edge, or a prior reconcile) committed while our fetch was in
         // flight — its result is at least as fresh as ours, so drop instead of
@@ -324,6 +334,7 @@ final class FlightListViewModel {
         guard fresh != lastPackTimestamps else { return false }
         loadGeneration &+= 1
         state = .loaded(flights)
+        pastTotal = page.pastTotal
         lastPackTimestamps = fresh
         // Keep the offline/cached-badge state consistent with the fresh list, the
         // same way loadFlights does (disk-only, no extra network).

@@ -543,3 +543,47 @@ class TestApiSections:
         assert old_f.id in recent_ids
         # The debriefed one drops to past.
         assert new_f.id not in recent_ids
+
+
+class TestPastSliceBuildsOnlyReturned:
+    """``past_limit`` / ``past_offset`` slice before the full responses are
+    built (#1042 follow-up): the output must match slicing the full list."""
+
+    def _seed(self, app_db):
+        ids = []
+        for i in range(8):
+            f = _save_flight(app_db, route=f"zz{i}", days_offset=-(i * 20 + 30), idx=i)
+            _save_pack(app_db, f.id, assessment="GREEN", days_out=1)
+            ids.append(f.id)
+        _save_flight(app_db, route="up", days_offset=3, idx=99)
+        return ids
+
+    def test_slices_match_full_list(self, client, app_db):
+        self._seed(app_db)
+        full = client.get("/api/flights")
+        assert full.status_code == 200
+        body = full.json()
+        other = [f for f in body if f["section"] != "past"]
+        past = [f for f in body if f["section"] == "past"]
+        assert len(past) == 8 and other
+        for limit, offset in [(0, 0), (3, 0), (3, 3), (20, 0), (2, 7)]:
+            r = client.get(f"/api/flights?past_limit={limit}&past_offset={offset}")
+            assert r.status_code == 200
+            assert r.headers["X-Past-Total"] == "8"
+            assert r.json() == other + past[offset:offset + limit]
+
+    def test_past_limit_zero_skips_past_packs(self, client, app_db, monkeypatch):
+        past_ids = set(self._seed(app_db))
+        import weatherbrief.api.flights as flights_api
+        seen: list[str] = []
+        real = flights_api._get_latest_packs
+
+        def spy(db, ids):
+            seen.extend(ids)
+            return real(db, ids)
+
+        monkeypatch.setattr(flights_api, "_get_latest_packs", spy)
+        r = client.get("/api/flights?past_limit=0")
+        assert r.status_code == 200
+        assert not past_ids & set(seen)
+        assert all(f["section"] != "past" for f in r.json())

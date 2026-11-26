@@ -816,17 +816,14 @@ def list_all_flights(
     filtered set rather than the whole history.
 
     Section computation runs over the *full* owned set before slicing, so
-    ``_compute_recent_section`` still sees every past flight.
+    ``_compute_recent_section`` still sees every past flight. Only the
+    flights actually returned get a full ``FlightResponse`` (latest pack,
+    aircraft, report flags): sectioning, the ``past_q`` filter and the slice
+    run on the bare rows first, so ``past_limit=0`` (web, #1042) or a small
+    teaser limit doesn't pay for every past flight it then drops.
     """
     paired = list_flights_with_role(db, user_id)
-    pack_status = _get_latest_packs(db, [f.id for f, _, _ in paired])
     debrief_map = _bulk_debriefs_for_owned(db, paired, user_id)
-    report_flag_map = bulk_report_flags(
-        db, [f.id for f, role, _ in paired if role == "owner" and f.user_id == user_id],
-    )
-    # Flights with an unopened notify-qualifying update — drives the flight-list
-    # red dot, kept consistent with the app-icon badge. One cheap query.
-    unseen_ids = unseen_flight_ids(db, user_id)
     # Two queries for the whole list — the trip card groups from these rather
     # than joining ``flight_trips`` into the hot flights query.
     trip_refs = bulk_trip_refs(db, user_id)
@@ -842,58 +839,33 @@ def list_all_flights(
     ]
     recent_set = _compute_recent_section(owned_pairs)
 
-    # Build responses, splitting past (paginated) from future+recent (always
-    # full). Order within each group follows ``list_flights_with_role``
-    # (departure_time desc); the frontend re-buckets by ``section`` so the
-    # concatenation order below only needs to preserve per-section order.
-    other: list[FlightResponse] = []  # future + recent
-    # Parallel to ``other``: (section, departure_time) per entry, so the
-    # soonest-first reorder below can pick out the future members without
-    # re-parsing the ISO strings on the responses.
-    other_meta: list[tuple[str, datetime]] = []
-    past: list[FlightResponse] = []
+    # Section every flight on the bare rows, splitting past (paginated) from
+    # future+recent (always full). Order within each group follows
+    # ``list_flights_with_role`` (departure_time desc); the frontend re-buckets
+    # by ``section`` so the concatenation order below only needs to preserve
+    # per-section order.
+    other: list[tuple[Flight, str, str | None, str]] = []  # future + recent
+    past: list[tuple[Flight, str, str | None, str]] = []
     for f, role, owner_name in paired:
         debrief = debrief_map.get(f.id) if role == "owner" else None
         section = _classify_section(f, has_debrief=debrief is not None, recent_set=recent_set)
-        resp = _flight_to_response(
-            f,
-            db,
-            viewer_id=user_id,
-            latest_briefing=pack_status.get(f.id),
-            role=role,
-            subscribed=(role == "subscriber"),
-            owner_display_name=owner_name,
-            debrief=debrief,
-            section=section,
-            unseen=f.id in unseen_ids,
-            trip=(
-                trip_refs.get(f.id) if role == "owner" else shared_refs.get(f.id)
-            ),
-            report_flags=report_flag_map.get(f.id, {}) if role == "owner" else {},
-        )
-        if section == "past":
-            past.append(resp)
-        else:
-            other.append(resp)
-            other_meta.append((section, f.departure_time))
+        (past if section == "past" else other).append((f, role, owner_name, section))
 
-    # Upcoming-flights ordering (#536). Opt-in account preference, loaded here
-    # in the body rather than via ``Depends()``: ``api/agent.py`` (the ChatGPT
-    # connector) calls this function directly, where a Depends default would
-    # arrive as a ``fastapi.params.Depends`` instance and never match.
-    if load_flight_order(db, user_id) == "soonest_first":
-        _reorder_future_soonest_first(other, other_meta)
+    def trip_for(f: Flight, role: str):
+        return trip_refs.get(f.id) if role == "owner" else shared_refs.get(f.id)
 
     # Filter before the count + slice so "show more" pages through matches.
     # Runs after section classification so a filtered-out past flight still
-    # counted towards ``_compute_recent_section`` above.
+    # counted towards ``_compute_recent_section`` above. Same fields the
+    # response carries (a subscriber never sees the owner's description).
     search_tokens = parse_query(past_q)
     if search_tokens:
         past = [
-            p for p in past
+            e for e in past
             if _search_matches(
-                p.waypoints, p.route_name, search_tokens, p.description,
-                p.trip.name if p.trip else None,
+                e[0].waypoints, e[0].route_name, search_tokens,
+                e[0].description if e[1] == "owner" else None,
+                (t.name if (t := trip_for(e[0], e[1])) else None),
             )
         ]
 
@@ -902,7 +874,46 @@ def list_all_flights(
         # past_offset / past_limit are validated >= 0 by Query(ge=0).
         past = past[past_offset : past_offset + past_limit]
 
-    return other + past
+    # Full responses for the returned flights only.
+    kept = other + past
+    pack_status = _get_latest_packs(db, [f.id for f, _, _, _ in kept])
+    report_flag_map = bulk_report_flags(
+        db, [f.id for f, role, _, _ in kept if role == "owner" and f.user_id == user_id],
+    )
+    # Flights with an unopened notify-qualifying update — drives the flight-list
+    # red dot, kept consistent with the app-icon badge. One cheap query.
+    unseen_ids = unseen_flight_ids(db, user_id)
+
+    def build(f: Flight, role: str, owner_name: str | None, section: str) -> FlightResponse:
+        return _flight_to_response(
+            f,
+            db,
+            viewer_id=user_id,
+            latest_briefing=pack_status.get(f.id),
+            role=role,
+            subscribed=(role == "subscriber"),
+            owner_display_name=owner_name,
+            debrief=debrief_map.get(f.id) if role == "owner" else None,
+            section=section,
+            unseen=f.id in unseen_ids,
+            trip=trip_for(f, role),
+            report_flags=report_flag_map.get(f.id, {}) if role == "owner" else {},
+        )
+
+    other_resp = [build(*e) for e in other]
+    # Parallel to ``other_resp``: (section, departure_time) per entry, so the
+    # soonest-first reorder below can pick out the future members without
+    # re-parsing the ISO strings on the responses.
+    other_meta: list[tuple[str, datetime]] = [(sec, f.departure_time) for f, _, _, sec in other]
+
+    # Upcoming-flights ordering (#536). Opt-in account preference, loaded here
+    # in the body rather than via ``Depends()``: ``api/agent.py`` (the ChatGPT
+    # connector) calls this function directly, where a Depends default would
+    # arrive as a ``fastapi.params.Depends`` instance and never match.
+    if load_flight_order(db, user_id) == "soonest_first":
+        _reorder_future_soonest_first(other_resp, other_meta)
+
+    return other_resp + [build(*e) for e in past]
 
 
 def _bulk_debriefs_for_owned(

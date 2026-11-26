@@ -269,6 +269,21 @@ actor APIClient {
         }
     }
 
+    /// `requestURL` plus the HTTP response, for a caller that needs a header
+    /// (e.g. `X-Past-Total` on the flight list).
+    func requestURLWithResponse<T: Decodable>(_ pathAndQuery: String) async throws -> (T, HTTPURLResponse) {
+        guard let url = URL(string: pathAndQuery, relativeTo: baseURL) else {
+            throw APIError.networkError(URLError(.badURL))
+        }
+        let (data, http) = try await _fetchResponse(url: url, method: "GET", body: nil, label: pathAndQuery)
+        do {
+            return (try JSONDecoder.weatherBrief.decode(T.self, from: data), http)
+        } catch {
+            Self.logger.error("Decoding failed for \(pathAndQuery): \(error)")
+            throw APIError.decodingError(error)
+        }
+    }
+
     /// Fetch raw data from a path that may contain query parameters.
     func requestDataURL(_ pathAndQuery: String, method: String = "GET", body: Data? = nil) async throws -> Data {
         guard let url = URL(string: pathAndQuery, relativeTo: baseURL) else {
@@ -326,6 +341,12 @@ actor APIClient {
     }
 
     private func _fetch(url: URL, method: String, body: Data?, label: String, quietLog: Bool = false) async throws -> Data {
+        try await _fetchResponse(url: url, method: method, body: body, label: label, quietLog: quietLog).0
+    }
+
+    private func _fetchResponse(
+        url: URL, method: String, body: Data?, label: String, quietLog: Bool = false
+    ) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url)
         request.httpMethod = method
         if let body {
@@ -349,7 +370,7 @@ actor APIClient {
 
         if (200...299).contains(http.statusCode) {
             ServiceStatusStore.noteReachable()
-            return data
+            return (data, http)
         }
         throw Self.statusError(http.statusCode, body: data)
     }

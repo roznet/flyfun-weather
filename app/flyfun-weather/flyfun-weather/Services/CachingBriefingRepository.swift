@@ -223,28 +223,49 @@ final class CachingBriefingRepository: BriefingRepository, CacheStatusReporting 
     func flights() async throws -> [FlightResponse] {
         do {
             let flights = try await online.flights()
-            isServingCachedFlights = false
-            // Cache for offline use
-            if let data = try? JSONEncoder.weatherBrief.encode(flights) {
-                try? await cache.writeMetadata(data, name: "flights")
-            }
+            await cacheFlightList(flights)
             return flights
         } catch {
             Self.logger.warning("Online flights() failed: \(error)")
-            isServingCachedFlights = true
-            // Fallback 1: cached flights.json
-            if let cached = await readCachedFlightsFromDisk() {
-                Self.logger.info("Serving \(cached.count) flights from cache (offline)")
-                return cached
-            }
-            // Fallback 2: recover from per-flight cached data (downloaded packs)
-            let recovered = await recoverFlightsFromCache()
-            if !recovered.isEmpty {
-                Self.logger.info("Recovered \(recovered.count) flights from download cache")
-                return recovered
-            }
-            throw error
+            return try await offlineFlights(after: error)
         }
+    }
+
+    /// The capped list, cached like `flights()`. Offline, the cache serves
+    /// whatever list was stored last (capped or full) with no past total.
+    func flightList(pastLimit: Int) async throws -> FlightListPage {
+        do {
+            let page = try await online.flightList(pastLimit: pastLimit)
+            await cacheFlightList(page.flights)
+            return page
+        } catch {
+            Self.logger.warning("Online flightList() failed: \(error)")
+            return FlightListPage(flights: try await offlineFlights(after: error), pastTotal: nil)
+        }
+    }
+
+    private func cacheFlightList(_ flights: [FlightResponse]) async {
+        isServingCachedFlights = false
+        // Cache for offline use
+        if let data = try? JSONEncoder.weatherBrief.encode(flights) {
+            try? await cache.writeMetadata(data, name: "flights")
+        }
+    }
+
+    private func offlineFlights(after error: Error) async throws -> [FlightResponse] {
+        isServingCachedFlights = true
+        // Fallback 1: cached flights.json
+        if let cached = await readCachedFlightsFromDisk() {
+            Self.logger.info("Serving \(cached.count) flights from cache (offline)")
+            return cached
+        }
+        // Fallback 2: recover from per-flight cached data (downloaded packs)
+        let recovered = await recoverFlightsFromCache()
+        if !recovered.isEmpty {
+            Self.logger.info("Recovered \(recovered.count) flights from download cache")
+            return recovered
+        }
+        throw error
     }
 
     /// Online-only single-flight fetch (Universal Link fallback for flights not

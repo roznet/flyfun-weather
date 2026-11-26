@@ -7,6 +7,7 @@ import aero.flyfun.weather.data.FixtureBriefingData
 import aero.flyfun.weather.data.FixtureBriefingRepository
 import aero.flyfun.weather.data.FixtureTripData
 import aero.flyfun.weather.data.FixtureTripRepository
+import aero.flyfun.weather.data.FlightListPage
 import aero.flyfun.weather.model.BriefingTab
 import aero.flyfun.weather.model.FlightFlexibility
 import aero.flyfun.weather.model.FlightOrder
@@ -129,6 +130,25 @@ class ViewModelTest {
 
         assertFalse(vm.isSelectionMode.value)
         assertEquals(listOf("fixture-1", "fixture-trip-out", "fixture-trip-back"), vm.flights.value.map { it.id })
+    }
+
+    @Test
+    fun flightListViewModel_asksForTheTeaserAndKeepsThePastTotal() = runTest {
+        val testScope = TestScope(StandardTestDispatcher(testScheduler))
+        val limits = mutableListOf<Int>()
+        val repo = object : FixtureBriefingRepository() {
+            override suspend fun listFlightsPage(pastLimit: Int): FlightListPage {
+                limits += pastLimit
+                return FlightListPage(listFlights(), pastTotal = 42)
+            }
+        }
+        val vm = FlightListViewModel(repository = repo, tripRepository = null, scopeOverride = testScope)
+
+        vm.loadFlights(nowEpochMs = 1_700_000_000_000L)
+        testScope.advanceUntilIdle()
+
+        assertEquals(listOf(FlightListViewModel.PAST_LIMIT), limits)
+        assertEquals(42, vm.pastTotal.value)
     }
 
     @Test

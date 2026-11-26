@@ -142,6 +142,7 @@ fun FlightListScreen(
     val order by viewModel.order.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val collapsedSections by viewModel.collapsedSections.collectAsState()
+    val pastTotal by viewModel.pastTotal.collectAsState()
     val isSelectionMode by viewModel.isSelectionMode.collectAsState()
     val selectedIds by viewModel.selectedFlightIds.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -438,6 +439,8 @@ fun FlightListScreen(
                                     null
                                 },
                                 searching = searchQuery.isNotBlank(),
+                                // Past loads only the teaser: the header shows the server's count.
+                                count = if (isPast) pastTotal ?: group.flights.size else group.flights.size,
                             )
                         }
                         if (!isCollapsed) {
@@ -602,8 +605,8 @@ private fun TripsQuickStrip(
     }
 }
 
-/** Past flights shown in the main list before "See all" (#1032). */
-private const val PAST_TEASER_COUNT = 3
+/** Past flights shown in the main list before "See all" (#1032): the ones the list loads. */
+private const val PAST_TEASER_COUNT = FlightListViewModel.PAST_LIMIT
 
 @Composable
 private fun FlightSectionHeader(
@@ -614,6 +617,7 @@ private fun FlightSectionHeader(
     onSeeAll: (() -> Unit)? = null,
     /** A list search is on: Past's button runs it on the archive. */
     searching: Boolean = false,
+    count: Int = group.flights.size,
 ) {
     val canCollapse = group.section.startsCollapsed && onSeeAll == null
     Row(
@@ -624,7 +628,7 @@ private fun FlightSectionHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = "${group.section.title.uppercase()} (${group.flights.size})",
+            text = "${group.section.title.uppercase()} ($count)",
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

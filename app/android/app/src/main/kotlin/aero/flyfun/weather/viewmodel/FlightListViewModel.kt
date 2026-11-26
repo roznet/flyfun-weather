@@ -37,6 +37,13 @@ class FlightListViewModel(
     private val _flights = MutableStateFlow<List<FlightResponse>>(emptyList())
     val flights: StateFlow<List<FlightResponse>> = _flights.asStateFlow()
 
+    /**
+     * Every past flight the server holds (`X-Past-Total`); [flights] carries only the newest
+     * [PAST_LIMIT]. Null offline: the Past header then counts the rows it has.
+     */
+    private val _pastTotal = MutableStateFlow<Int?>(null)
+    val pastTotal: StateFlow<Int?> = _pastTotal.asStateFlow()
+
     private val _trips = MutableStateFlow<List<TripSummaryResponse>>(emptyList())
     val trips: StateFlow<List<TripSummaryResponse>> = _trips.asStateFlow()
 
@@ -80,11 +87,12 @@ class FlightListViewModel(
         _errorMessage.value = null
         scope.launch {
             runCatching {
-                val list = repository.fetchFlights()
+                val page = repository.listFlightsPage(PAST_LIMIT)
                 val tripList = runCatching { tripRepository?.listTrips() ?: emptyList() }.getOrDefault(emptyList())
-                list to tripList
-            }.onSuccess { (list, tripList) ->
-                _flights.value = list
+                page to tripList
+            }.onSuccess { (page, tripList) ->
+                _flights.value = page.flights
+                _pastTotal.value = page.pastTotal
                 _trips.value = tripList
                 recomputeGroups(nowEpochMs)
                 _isLoading.value = false
@@ -297,5 +305,13 @@ class FlightListViewModel(
             order = _order.value,
             nowEpochMs = nowEpochMs,
         )
+    }
+
+    companion object {
+        /**
+         * Past flights the list loads: the teaser's rows. The Past screen pages the rest from
+         * the archive (#1032).
+         */
+        const val PAST_LIMIT = 3
     }
 }
