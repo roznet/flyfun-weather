@@ -238,6 +238,23 @@ class TestRetention:
         db.commit()
         assert json.loads(db.get(FlightFactsRow, "r1").forecast_tags_json) == {"ICE": "red"}
 
+    def test_frozen_record_committed_before_any_purge(self, db, tmp_path, monkeypatch):
+        # Asserted by call order: on SQLite a released savepoint already
+        # commits (pysqlite), so a rollback test could not tell.
+        f = _flight(db, "r6", 100)  # the test user is inactive: T2 at 90 days
+        dep = f.departure_time.replace(tzinfo=timezone.utc)
+        _pack(db, tmp_path, f, dep - timedelta(hours=3), _manifest(aircraft_icing="red"))
+        db.commit()
+        import weatherbrief.tasks.retention as retention
+
+        calls: list[str] = []
+        real_commit, real_purge = db.commit, retention._purge_full_pack
+        monkeypatch.setattr(db, "commit", lambda: (calls.append("commit"), real_commit())[1])
+        monkeypatch.setattr(retention, "_purge_full_pack",
+                            lambda *a, **k: (calls.append("purge"), real_purge(*a, **k))[1])
+        run_retention(db, RetentionConfig())
+        assert "purge" in calls and calls.index("commit") < calls.index("purge")
+
     def test_failed_facts_write_keeps_packs(self, db, tmp_path, monkeypatch):
         f = _flight(db, "r2", 100)  # the test user is inactive: T2 at 90 days
         dep = f.departure_time.replace(tzinfo=timezone.utc)

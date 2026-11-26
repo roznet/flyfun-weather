@@ -606,6 +606,22 @@ def archive_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def db_session():
+    """Isolated engine + session per test, shadowing the shared fixture.
+
+    ``run_retention`` commits once the past-flights records are frozen,
+    before any pack file is deleted (#1031), so the shared rollback-only
+    session would leak rows into later tests. Same pattern as
+    ``prune_session`` below.
+    """
+    engine = make_app_engine()
+    session = sessionmaker(bind=engine)()
+    yield session
+    session.close()
+    engine.dispose()
+
+
+@pytest.fixture
 def prune_session():
     """Isolated engine + session for the raw pruner.
 

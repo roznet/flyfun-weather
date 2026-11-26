@@ -141,6 +141,10 @@ def run_retention(db: Session, config: RetentionConfig | None = None) -> Retenti
     no_facts = _ensure_facts_before_t2(
         db, rows, pirep_pack_ids, inactive_user_ids, debriefed_flight_ids, config, now,
     )
+    if not config.dry_run:
+        # Durable before any file goes: a run that dies after purging must
+        # not roll back the frozen tags those files were the source of.
+        db.commit()
 
     # The live layer is per flight, not per pack: one pass per flight, before
     # the pack loop can delete the rows that lead to it.
