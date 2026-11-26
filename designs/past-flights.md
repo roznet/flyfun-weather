@@ -90,7 +90,9 @@ month come from the server's order.
 - Web: the Past section of `flights.html` reads the archive (list view)
   instead of the `past` slice of `GET /api/flights` (which it now asks with
   `past_limit=0`). Search box + chips drive the query; paging is "Load more".
-  Subscribed past flights no longer appear there.
+  A background reload (delete, debrief save) re-fetches as many rows as are
+  shown, so the loaded pages survive. Subscribed past flights no longer
+  appear there.
 - iOS: the list keeps a teaser of the latest 3 Past flights plus "See all",
   which pushes `PastFlightsView` (`.searchable`, chips, month sections).
   iPad adds saved filters (All past, With icing, With convection, Cancelled,

@@ -699,17 +699,16 @@ export function renderFlightList(
   }
 
   // Bucket by server-supplied section (falls back to past/active split for
-  // older API responses missing the field).
+  // older API responses missing the field). Past rows are not in `flights`
+  // (requested with `pastLimit: 0`): they come from the archive (`pastRows`).
   const future: FlightResponse[] = [];
   const recent: FlightResponse[] = [];
-  const past: FlightResponse[] = [];
   for (const f of flights) {
     const s = f.section
       ?? (isFlightPast(f.target_date, f.target_time_utc, f.flight_duration_hours, f.departure_time)
         ? 'past' : 'future');
     if (s === 'future') future.push(f);
     else if (s === 'recent') recent.push(f);
-    else past.push(f);
   }
 
   // --- Upcoming filter (client-side over future + recent) ---
@@ -773,16 +772,12 @@ export function renderFlightList(
   // archive endpoint (store.loadPast); nothing is filtered or counted here.
   const pastFilter = filters?.pastFilter ?? EMPTY_PAST_FILTER;
   const pastQuery = pastFilter.q;
-  const pastTokens = parseQuery(pastQuery);
   const pastActive = pastFilterActive(pastFilter);
   let pastSection = '';
-  if (past.length > 0 || pastRows.length > 0 || pastActive) {
+  if (pastRows.length > 0 || pastActive) {
     const expandedClass = pastExpanded ? '' : ' collapsed';
-    // Rows from an older /api/flights (no archive) still render as cards.
-    const pastCards = pastRows.length > 0
-      ? pastRows.map(r => renderPastRow(r, selectedIds.has(r.id))).join('')
-      : past.map(f => renderFlightCard(f, activeRefreshes[f.id], selectedIds.has(f.id), pastTokens)).join('');
-    const loadedPast = pastRows.length || past.length;
+    const pastCards = pastRows.map(r => renderPastRow(r, selectedIds.has(r.id))).join('');
+    const loadedPast = pastRows.length;
     const totalPast = Math.max(pastTotal, loadedPast);
     const remaining = totalPast - loadedPast;
     const showMoreBtn = remaining > 0
@@ -992,7 +987,7 @@ export function renderFlightList(
   // selections belonging to not-yet-loaded pages.
   let effectiveSelected = selectedIds;
   if (filterActive && selectedIds.size > 0) {
-    const visible = new Set([...[...futureShown, ...recentShown, ...past].map(f => f.id), ...pastRows.map(r => r.id)]);
+    const visible = new Set([...[...futureShown, ...recentShown].map(f => f.id), ...pastRows.map(r => r.id)]);
     if ([...selectedIds].some(id => !visible.has(id))) {
       // Apply locally for the rest of *this* render, and push to the store on a
       // microtask. Calling the store inline would update it synchronously,
@@ -1007,9 +1002,7 @@ export function renderFlightList(
   const active = [...futureShown, ...recentShown];
   const selectableActive = active.filter(f => f.role !== 'subscriber').map(f => f.id);
   // Archive rows are owned flights only, so every one is selectable.
-  const selectablePast = pastRows.length > 0
-    ? pastRows.map(r => r.id)
-    : past.filter(f => f.role !== 'subscriber').map(f => f.id);
+  const selectablePast = pastRows.map(r => r.id);
   renderSelectionBar(
     effectiveSelected.size,
     [...selectableActive, ...selectablePast],

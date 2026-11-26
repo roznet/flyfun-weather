@@ -6,6 +6,10 @@
  *  computes a tag, a count or a match.
  */
 
+// SYNC: HAZARD_CHIPS / OUTCOME_CHIPS (order, keys, labels) are hand-copied to
+// iOS `PastChips` (Models/API/PastArchiveResponse.swift) and Android `PastChips`
+// (model/PastArchiveModels.kt). Change all three together.
+
 /** Hazard chips, in display order. `tag` is the archive tag the server takes. */
 export const HAZARD_CHIPS: ReadonlyArray<{ tag: string; labelKey: string }> = [
   { tag: 'ICE', labelKey: 'past.chipIcing' },

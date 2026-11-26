@@ -55,6 +55,8 @@ class PastFlightsViewModel(
     /** Newest request wins: a page or filter change that lands late is dropped. */
     private var loadToken = 0
     private var searchJob: Job? = null
+    /** The page or filter load in flight; a newer filter cancels it. */
+    private var loadJob: Job? = null
 
     val hasMore: Boolean get() = _rows.value.size < _total.value
 
@@ -62,7 +64,8 @@ class PastFlightsViewModel(
         val token = ++loadToken
         _isLoading.value = true
         val query = _filter.value.queryItems(limit = PAGE_SIZE, offset = 0)
-        scope.launch {
+        loadJob?.cancel()
+        loadJob = scope.launch {
             try {
                 val resp = repository.pastArchive(query)
                 if (token != loadToken) return@launch
@@ -72,6 +75,11 @@ class PastFlightsViewModel(
                 _error.value = null
             } catch (e: Exception) {
                 if (token != loadToken) return@launch
+                // Drop the previous filter's rows and counts: beside the new chips they
+                // would read as this filter's results. The screen then shows the error.
+                _rows.value = emptyList()
+                _total.value = 0
+                _facets.value = null
                 _error.value = e.message ?: "Couldn't load past flights"
             } finally {
                 if (token == loadToken) _isLoading.value = false
@@ -85,7 +93,7 @@ class PastFlightsViewModel(
         val token = ++loadToken
         _isLoading.value = true
         val query = _filter.value.queryItems(limit = PAGE_SIZE, offset = _rows.value.size)
-        scope.launch {
+        loadJob = scope.launch {
             try {
                 val resp = repository.pastArchive(query)
                 if (token != loadToken) return@launch

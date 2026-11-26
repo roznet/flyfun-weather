@@ -173,3 +173,27 @@ describe('flights store: pruneSelection', () => {
     expect(flightsStore.getState().selectedIds.size).toBe(0);
   });
 });
+
+describe('flights store: background reload keeps loaded past pages', () => {
+  it('loadFlights re-fetches as many past rows as are shown', async () => {
+    const shown = Array.from({ length: 45 }, (_, i) => row(`p${i}`));
+    flightsStore.setState({ pastRows: shown, pastTotal: 60 });
+    fetchArchive.mockResolvedValueOnce(page(shown, 60));
+
+    await flightsStore.getState().loadFlights();
+
+    const params = fetchArchive.mock.calls[0][0] as URLSearchParams;
+    expect(params.get('limit')).toBe('45');
+    expect(params.get('offset')).toBeNull();
+    expect(flightsStore.getState().pastRows).toHaveLength(45);
+  });
+
+  it('a filter reload still starts from one page', async () => {
+    flightsStore.setState({ pastRows: Array.from({ length: 45 }, (_, i) => row(`p${i}`)), pastTotal: 60 });
+    fetchArchive.mockResolvedValueOnce(page([row('x')], 1));
+
+    await flightsStore.getState().setPastQuery('LESB');
+
+    expect((fetchArchive.mock.calls[0][0] as URLSearchParams).get('limit')).toBe(String(PAST_PAGE_SIZE));
+  });
+});

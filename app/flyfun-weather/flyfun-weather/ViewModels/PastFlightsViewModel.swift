@@ -19,6 +19,8 @@ final class PastFlightsViewModel {
     /// Newest request wins: a page or filter change that lands late is dropped.
     private var loadToken = 0
     private var searchTask: Task<Void, Never>?
+    /// The filter reload in flight; a newer filter cancels it.
+    private var reloadTask: Task<Void, Never>?
 
     init(repository: any BriefingRepository, filter: PastFilter = .all) {
         self.repository = repository
@@ -67,7 +69,13 @@ final class PastFlightsViewModel {
             facets = resp.facets
             error = nil
         } catch {
-            guard token == loadToken else { return }
+            // Superseded (cancelled by a newer filter): that request owns the state.
+            guard token == loadToken, !Task.isCancelled else { return }
+            // Drop the previous filter's rows and counts: beside the new chips
+            // they would read as this filter's results. The view then shows the error.
+            rows = []
+            total = 0
+            facets = nil
             self.error = error.localizedDescription
         }
         isLoading = false
@@ -98,7 +106,8 @@ final class PastFlightsViewModel {
         change(&next)
         guard next != filter else { return }
         filter = next
-        Task { await reload() }
+        reloadTask?.cancel()
+        reloadTask = Task { await reload() }
     }
 
     func toggleTag(_ tag: String) { update { $0.tags = Self.toggled($0.tags, tag) } }

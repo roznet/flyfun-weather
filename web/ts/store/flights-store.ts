@@ -12,6 +12,8 @@ import { errorToMessage } from '../utils';
 /** Past-section page size. Future + recent are never paginated; past comes
  *  from the archive endpoint (#1031), never from `/api/flights`. */
 export const PAST_PAGE_SIZE = 20;
+/** `GET /api/flights/archive` caps `limit` at 200. */
+const PAST_MAX_LIMIT = 200;
 
 export interface FlightsState {
   // Data
@@ -58,8 +60,9 @@ export interface FlightsState {
   setPastQuery: (q: string) => Promise<void>;
   /** Change chips / source / hide and reload the first past page. */
   setPastFilter: (patch: Partial<PastFilterState>) => Promise<void>;
-  /** Reload the first past page for the current filter. */
-  loadPast: () => Promise<void>;
+  /** Reload the first past page for the current filter. `keepLoaded`: re-fetch
+   *  as many rows as are loaded now (a background reload keeps "Show more"). */
+  loadPast: (opts?: { keepLoaded?: boolean }) => Promise<void>;
   loadDebriefStats: () => Promise<void>;
   pollActiveRefreshes: () => Promise<void>;
   createFlight: (waypoints: string[], targetDate: string, opts?: {
@@ -122,7 +125,7 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
     set({ loading: true, error: null });
     // Past rows come from the archive (#1032), fetched alongside: a failure
     // there must not hide the upcoming list.
-    const past = get().loadPast();
+    const past = get().loadPast({ keepLoaded: true });
     try {
       // The card and the debrief form read everything they need from each
       // flight's inline `latest_briefing`, so a single request paints the
@@ -147,12 +150,17 @@ export const flightsStore = createStore<FlightsState>((set, get) => ({
     await past;
   },
 
-  loadPast: async () => {
+  loadPast: async (opts) => {
     const seq = ++pastLoadSeq;
+    // A reload after a delete / debrief save keeps the pages already shown
+    // (capped at the endpoint's 200-row limit) instead of snapping to page 1.
+    const limit = opts?.keepLoaded
+      ? Math.min(PAST_MAX_LIMIT, Math.max(PAST_PAGE_SIZE, get().pastRows.length))
+      : PAST_PAGE_SIZE;
     set({ pastFiltering: true });
     try {
       const resp = await api.fetchArchive(
-        archiveParams(get().pastFilter, { limit: PAST_PAGE_SIZE, offset: 0 }),
+        archiveParams(get().pastFilter, { limit, offset: 0 }),
       );
       // Only the newest request owns the rows and the busy flag.
       if (seq !== pastLoadSeq) return;
