@@ -1249,7 +1249,7 @@ class ConvectiveCharacterEvaluator:
             )
             detail = adv_t(f"convective_character.{character.value}", loc)
             if character not in (ConvectiveCharacter.NONE, ConvectiveCharacter.UNKNOWN):
-                detail += f" ({format_extent(extent)})"
+                detail += f" ({format_extent(extent, locale=loc)})"
             # Below-base clearance note (#298) — annotate-only, low bands only. The
             # band/colour is already set; this adds the avoidance geometry vs cruise
             # (and a per-altitude hint). Never on EMBEDDED/WIDESPREAD/ORGANIZED —

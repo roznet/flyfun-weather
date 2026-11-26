@@ -309,6 +309,7 @@ class MountainWindEvaluator:
             # that denominator the way ``sun`` names "of the sunlit route".
             ext = format_extent(
                 summary.extent, domain_label=adv_t("mountain_wind.of_terrain", loc),
+                locale=loc,
             )
             sig_text = " + ".join(
                 adv_t(f"mountain_wind.sig_{s}", loc)

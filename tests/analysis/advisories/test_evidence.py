@@ -8,6 +8,8 @@ from a single predicate so they cannot drift.
 
 from __future__ import annotations
 
+import pytest
+
 from weatherbrief.analysis.advisories._helpers import (
     DEFAULT_CRUISE_TAS_KT,
     EMPTY_EXTENT,
@@ -434,6 +436,21 @@ class TestTimeAxis:
     def test_format_appends_the_time_when_it_is_worth_saying(self):
         ext = route_extent([0.0, 50.0, 100.0], 100.0, [False, True, True], speed_kt=120.0)
         assert format_extent(ext) == "75nm/100nm (75%), about 38 min in it"
+
+    def test_english_is_the_default_locale(self):
+        ext = route_extent([0.0, 50.0, 100.0], 100.0, [False, True, True], speed_kt=120.0)
+        assert format_extent(ext, locale="en") == format_extent(ext)
+        assert format_extent(ext, locale="xx") == format_extent(ext)
+
+    @pytest.mark.parametrize("locale, expected", [
+        ("fr", "75nm/100nm (75%), soit environ 38 min de vol"),
+        ("de", "75nm/100nm (75%), etwa 38 min Flugzeit darin"),
+        ("es", "75nm/100nm (75%), unos 38 min de vuelo"),
+    ])
+    def test_time_axis_is_localised(self, locale, expected):
+        """#1033: the suffix was English on every locale's card."""
+        ext = route_extent([0.0, 50.0, 100.0], 100.0, [False, True, True], speed_kt=120.0)
+        assert format_extent(ext, locale=locale) == expected
 
     def test_format_stays_quiet_for_a_sliver(self):
         # One point tightly bracketed by neighbours owns 4nm; at 120kt that is

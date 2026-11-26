@@ -31,6 +31,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Auswertung fehlgeschlagen ({error})",
         "es": "Fallo en la evaluación ({error})",
     },
+    # Time axis appended to a route extent by ``format_extent`` (#571, #1033).
+    "extent.minutes_in_it": {
+        "en": ", about {minutes} min in it",
+        "fr": ", soit environ {minutes} min de vol",
+        "de": ", etwa {minutes} min Flugzeit darin",
+        "es": ", unos {minutes} min de vuelo",
+    },
 
     # --- turbulence ---
     "turbulence.smooth": {
@@ -1216,6 +1223,32 @@ _STRINGS: dict[str, dict[str, str]] = {
         "fr": "Le modèle prévoit {kinds} {extent}",
         "de": "Modell erwartet {kinds} {extent}",
         "es": "El modelo prevé {kinds} {extent}",
+    },
+    # freezing_precip sentences (#1033: were English literals). {extent} is a
+    # formatted extent.
+    "freezing_precip.active": {
+        "en": "Freezing precipitation {extent}",
+        "fr": "Précipitations verglaçantes {extent}",
+        "de": "Gefrierender Niederschlag {extent}",
+        "es": "Precipitación engelante {extent}",
+    },
+    "freezing_precip.primed_suffix": {
+        "en": "; primed profile {extent}",
+        "fr": "; profil favorable {extent}",
+        "de": "; begünstigendes Profil {extent}",
+        "es": "; perfil favorable {extent}",
+    },
+    "freezing_precip.primed": {
+        "en": "Freezing-rain profile (no active precip) {extent}",
+        "fr": "Profil de pluie verglaçante (sans précipitations actives) {extent}",
+        "de": "Profil für gefrierenden Regen (kein aktiver Niederschlag) {extent}",
+        "es": "Perfil de lluvia engelante (sin precipitación activa) {extent}",
+    },
+    "freezing_precip.none": {
+        "en": "No freezing precipitation signature",
+        "fr": "Aucun signe de précipitations verglaçantes",
+        "de": "Keine Anzeichen für gefrierenden Niederschlag",
+        "es": "Sin indicios de precipitación engelante",
     },
     "freezing_precip.ptype.freezing_rain": {
         "en": "freezing rain", "fr": "pluie verglaçante",

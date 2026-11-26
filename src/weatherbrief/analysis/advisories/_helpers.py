@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from collections.abc import Callable, Sequence
 
+from weatherbrief.analysis.advisories.strings import adv_t
 from weatherbrief.analysis.route_geometry import (
     EMPTY_EXTENT,
     RouteExtent,
@@ -174,7 +175,12 @@ def resolve_cruise_tas(ctx: RouteContext) -> float:
     return DEFAULT_CRUISE_TAS_KT
 
 
-def format_extent(ext: RouteExtent, *, domain_label: str | None = None) -> str:
+def format_extent(
+    ext: RouteExtent,
+    *,
+    domain_label: str | None = None,
+    locale: str | None = None,
+) -> str:
     """Format a :class:`RouteExtent` as '30nm/55nm (55%)'.
 
     Takes the extent, never counts — that is what keeps the sentence and the
@@ -182,6 +188,10 @@ def format_extent(ext: RouteExtent, *, domain_label: str | None = None) -> str:
     (#571 D2). ``domain_label`` names a denominator that is *not* the whole
     route ("of high terrain"), which the domain-scoped evaluators must pass:
     "543nm/582nm" for a mountain-point fraction was the ~4× overstatement.
+
+    ``locale`` translates the time-axis suffix (#1033). Pass the locale of the
+    sentence the extent sits in; a sentence still hard-coded in English passes
+    none, so the whole line stays in one language.
     """
     if ext.domain_nm <= 0:
         return "0nm"
@@ -201,7 +211,7 @@ def format_extent(ext: RouteExtent, *, domain_label: str | None = None) -> str:
     # minutes gate would grade one aircraft differently from another for reasons
     # the pilot never set.
     if ext.minutes is not None and ext.minutes >= _MIN_REPORTABLE_MINUTES:
-        out += f", about {round(ext.minutes)} min in it"
+        out += adv_t("extent.minutes_in_it", locale, minutes=round(ext.minutes))
     return out
 
 

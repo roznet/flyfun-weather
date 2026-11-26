@@ -60,6 +60,33 @@ def _build_calls():
                 yield path.name, node.lineno, {k.arg for k in node.keywords}
 
 
+# Evaluators whose sentences are still English-only by design: a localised
+# time axis would put a French suffix on an English sentence (#1033).
+_ENGLISH_ONLY_EXTENT_FILES = {"dd_nwp_agreement.py"}  # dev diagnostic card
+
+
+class TestExtentTextIsLocalised:
+    def test_every_format_extent_call_passes_a_locale(self):
+        """#1033: ``format_extent`` appends "about N min in it", so a call
+        without ``locale=`` prints English on a French/German/Spanish card.
+        Walks the package so a new call site is covered automatically."""
+        offenders = []
+        for path in sorted(_ADVISORY_DIR.rglob("*.py")):
+            if path.name in _ENGLISH_ONLY_EXTENT_FILES:
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "format_extent"
+                    and "locale" not in {k.arg for k in node.keywords}
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}")
+        assert not offenders, (
+            f"format_extent called without locale= (English suffix): {offenders}"
+        )
+
+
 class TestBuildCallShape:
     def test_no_evaluator_publishes_an_nm_without_its_denominator(self):
         """`affected_nm` and `domain_nm` must travel together.

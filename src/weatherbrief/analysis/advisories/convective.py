@@ -152,8 +152,8 @@ class ConvectiveEvaluator:
             # Each string quotes the extent of the population it names (#571
             # D1): ``ext_mod`` is the MODERATE+ geometry, not a share of the
             # any-risk union scaled to look like one.
-            ext = format_extent(grade.extent)
-            ext_mod = format_extent(grade.extent_mod)
+            ext = format_extent(grade.extent, locale=ctx.locale)
+            ext_mod = format_extent(grade.extent_mod, locale=ctx.locale)
             loc = ctx.locale
             cover_suffix = _coverage_suffix(max_cover_pct)
             # Wording only — the colour was decided by ``grade_convective_model``.

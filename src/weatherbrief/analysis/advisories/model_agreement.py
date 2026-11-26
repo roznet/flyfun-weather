@@ -159,11 +159,13 @@ class ModelAgreementEvaluator:
             if status == AdvisoryStatus.GREEN and moderate_count > 0:
                 detail = adv_t(
                 "model_agreement.mostly_good", loc,
-                extent=format_extent(summary.extent_of(lambda s: "moderate" in s.tags)),
+                extent=format_extent(
+                    summary.extent_of(lambda s: "moderate" in s.tags), locale=loc,
+                ),
             )
             else:
                 detail = adv_t(
-                "model_agreement.poor", loc, extent=format_extent(summary.extent),
+                "model_agreement.poor", loc, extent=format_extent(summary.extent, locale=loc),
             )
 
         # Coverage tolerance (#391): a "good agreement" verdict resting on real

@@ -481,3 +481,29 @@ def test_ptype_and_primed_points_are_counted_once_each_and_both_named():
     assert "; primed profile" in pm.detail
     assert pm.affected_points == 2
     assert pm.floors_aggregate is True
+
+
+# --- #1033: the sentences and their time axis are localised ------------------
+
+_RED_LONG = [_dry()] * 5 + [_active_fzra()] * 5
+
+
+@pytest.mark.parametrize("locale, head, minutes", [
+    ("fr", "Précipitations verglaçantes ", ", soit environ "),
+    ("de", "Gefrierender Niederschlag ", ", etwa "),
+    ("es", "Precipitación engelante ", ", unos "),
+])
+def test_red_sentence_is_localised_end_to_end(locale, head, minutes):
+    ctx = dataclasses.replace(_ctx(_RED_LONG), locale=locale)
+    result = FreezingPrecipEvaluator.evaluate(ctx, {})
+    detail = result.per_model[0].detail
+    assert detail.startswith(head)
+    assert minutes in detail
+    assert "min in it" not in detail
+
+
+def test_english_red_sentence_is_unchanged():
+    result = FreezingPrecipEvaluator.evaluate(_ctx(_RED_LONG), {})
+    detail = result.per_model[0].detail
+    assert detail.startswith("Freezing precipitation ")
+    assert detail.endswith(" min in it")

@@ -255,16 +255,16 @@ class FreezingPrecipEvaluator:
 
             if active_pts > 0:
                 status = AdvisoryStatus.RED
-                detail = (
-                    "Freezing precipitation "
-                    f"{format_extent(active_ext)}"
+                detail = adv_t(
+                    "freezing_precip.active", loc,
+                    extent=format_extent(active_ext, locale=loc),
                 )
                 if ptype_pts:
                     detail += "; " + _ptype_sentence(ptype_kinds, ptype_ext, loc)
                 if primed_pts:
-                    detail += (
-                        f"; primed profile "
-                        f"{format_extent(primed_ext)}"
+                    detail += adv_t(
+                        "freezing_precip.primed_suffix", loc,
+                        extent=format_extent(primed_ext, locale=loc),
                     )
             elif ptype_pts > 0:
                 # Graded AMBER at any point, no coverage threshold (#411,
@@ -272,21 +272,21 @@ class FreezingPrecipEvaluator:
                 status = AdvisoryStatus.AMBER
                 detail = _ptype_sentence(ptype_kinds, ptype_ext, loc)
                 if primed_pts:
-                    detail += (
-                        f"; primed profile "
-                        f"{format_extent(primed_ext)}"
+                    detail += adv_t(
+                        "freezing_precip.primed_suffix", loc,
+                        extent=format_extent(primed_ext, locale=loc),
                     )
             elif primed_pts > 0 and grade_extent(
                 primed_ext, amber_pct=extent_pct_amber, min_nm=extent_min_nm,
             ) != AdvisoryStatus.GREEN:
                 status = AdvisoryStatus.AMBER
-                detail = (
-                    "Freezing-rain profile (no active precip) "
-                    f"{format_extent(primed_ext)}"
+                detail = adv_t(
+                    "freezing_precip.primed", loc,
+                    extent=format_extent(primed_ext, locale=loc),
                 )
             else:
                 status = AdvisoryStatus.GREEN
-                detail = "No freezing precipitation signature"
+                detail = adv_t("freezing_precip.none", loc)
 
             # Coverage tolerance (#391): a "no signature" verdict from assessable
             # points at too small a share of the route cannot vouch for the rest.
@@ -326,7 +326,8 @@ def _ptype_sentence(kinds: list[str], extent, locale: str | None) -> str:
     """"Model forecasts freezing drizzle 20nm/400nm (5%)" for the type tier."""
     names = ", ".join(adv_t(f"freezing_precip.ptype.{k}", locale) for k in kinds)
     return adv_t(
-        "freezing_precip.ptype", locale, kinds=names, extent=format_extent(extent),
+        "freezing_precip.ptype", locale, kinds=names,
+        extent=format_extent(extent, locale=locale),
     )
 
 
