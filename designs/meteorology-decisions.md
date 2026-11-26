@@ -8577,3 +8577,46 @@ inside and outside when the grouper merges or splits layers. The turbulence
 advisory reads Ri layers only (`base_ft <= cruise <= top_ft`), and the icing
 advisory reads `icing_zones` only; E-Shear and SFIP bands are display-only.
 Revisit if a pilot report or replay shows a grade moving on such a flip.
+
+## 91. Airport values stay on the bilinear GRIB blend; no terrain-matched cell (#924)
+
+**Date:** 2026-11-26 · **Issue:** #924 · **Related:** #912, #914, §61
+
+### Context
+
+Since #912 (briefings) and #914 (airport snapshots and verification, live
+2026-10-24/25), ICON's airport surface values come from our GRIB decode as a
+bilinear blend of the 4 surrounding cells, with no elevation correction. They
+used to come from Open-Meteo's `cell_selection=land`, which picks the land
+cell whose model terrain best matches the spot. The worry was that valley and
+coastal fields would lose their valley fog or sea-breeze side.
+
+### Measured
+
+Airport verification (`verification_daily_stats`, `source='standalone'`, D0
+and D1, 608 airports), ICON against ECMWF as the control (its source did not
+change), 2026-09-24 to 10-23 vs 2026-11-01 to 11-23. Full analysis and
+tables:
+[#924 comment](https://github.com/roznet/flyfun-weather/issues/924#issuecomment-7190698681).
+
+- **Flight category hit rate:** ICON gained on ECMWF in every terrain class:
+  median −2.9 pp excess drop on flat airports, −3.3 pp coastal, −4.3 pp
+  mountain/valley. The class differences are not significant.
+- **Temperature:** no net change in the mountains (Norwegian fjord and valley
+  fields worse by about 1 °C, Sion and Samedan better by about 2 °C). The one
+  weak sign is coastal: 26% of coastal airports worse by more than 0.2 °C
+  against ECMWF, vs 10% of flat ones (median +0.05 °C). That fits a sea cell
+  sometimes landing in the blend.
+
+### Choice
+
+**Keep bilinear at the airports**, the same as en route, so the surface and
+the column stay on one model, run and terrain. No Open-Meteo request for the
+two airports, and no terrain-matched cell.
+
+### If it is ever revisited
+
+The worst airports are islands and fjord-side fields (Greek islands, Madeira,
+the Azores, the Channel Islands, northern Norway), not high ones. The fix to
+try would be a land-preferring blend (drop sea cells from the 4-point
+weights), not an elevation correction.
