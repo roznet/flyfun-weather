@@ -71,7 +71,7 @@ from weatherbrief.storage.sounding_profiles import (
 from weatherbrief.tasks.route_weather import run_realtime_refresh
 from weatherbrief.tasks.refresh_flight_gone import (
     check_flight_at_stage,
-    discard_refresh_for_gone_flight,
+    close_failed_refresh,
 )
 from weatherbrief.models.live import (
     LiveChanges,
@@ -2817,12 +2817,10 @@ async def refresh_briefing(
             refresh_registry.mark_outcome(flight_id, "succeeded")
             logger.info("Background refresh complete for %s", flight_id)
         except Exception as exc:
-            if discard_refresh_for_gone_flight(flight_id, pack_path, exc):
-                refresh_registry.mark_outcome(flight_id, "abandoned", str(exc))
-                logger.info("Background refresh abandoned for %s: %s", flight_id, exc)
-            else:
-                refresh_registry.mark_outcome(flight_id, "failed", str(exc))
-                logger.error("Background refresh failed for %s: %s", flight_id, exc, exc_info=True)
+            close_failed_refresh(
+                refresh_registry, flight_id, pack_path, exc,
+                label="Background refresh", log=logger,
+            )
         finally:
             refresh_registry.unregister(flight_id)
 
@@ -3200,13 +3198,12 @@ async def refresh_briefing_stream(
             refresh_registry.mark_outcome(flight_id, "succeeded")
             asyncio.run_coroutine_threadsafe(queue.put(complete_event), loop)
         except Exception as exc:
-            if discard_refresh_for_gone_flight(flight_id, pack_path, exc):
-                refresh_registry.mark_outcome(flight_id, "abandoned", str(exc))
-                logger.info("Streaming refresh abandoned for %s: %s", flight_id, exc)
+            if close_failed_refresh(
+                refresh_registry, flight_id, pack_path, exc,
+                label="Streaming refresh", log=logger,
+            ):
                 message = "This flight was moved or deleted, so its refresh was stopped."
             else:
-                refresh_registry.mark_outcome(flight_id, "failed", str(exc))
-                logger.error("Streaming refresh failed: %s", exc, exc_info=True)
                 message = str(exc)
             error_event = {"type": "error", "message": message}
             asyncio.run_coroutine_threadsafe(queue.put(error_event), loop)

@@ -176,6 +176,44 @@ class TestDiscardRefreshForGoneFlight:
         assert pack.is_dir()
 
 
+    def test_rmtree_failure_is_logged(self, monkeypatch, tmp_path, caplog):
+        """A half-removed dir is the orphan we exist to prevent — never silent."""
+        def _boom(_path):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(gone_mod.shutil, "rmtree", _boom)
+        pack = _make_pack(tmp_path)
+        with caplog.at_level("WARNING", logger=gone_mod.__name__):
+            assert discard_refresh_for_gone_flight(FLIGHT_ID, pack, FlightGoneError(FLIGHT_ID))
+        assert "could not remove" in caplog.text
+
+
+class _Registry:
+    def __init__(self) -> None:
+        self.outcomes: list[tuple[str, str, str | None]] = []
+
+    def mark_outcome(self, flight_id: str, status: str, error: str | None = None) -> None:
+        self.outcomes.append((flight_id, status, error))
+
+
+class TestCloseFailedRefresh:
+    def test_gone_flight_closes_abandoned(self, tmp_path):
+        reg = _Registry()
+        pack = _make_pack(tmp_path)
+        exc = FlightGoneError(FLIGHT_ID, "fetch_gramet")
+        assert gone_mod.close_failed_refresh(reg, FLIGHT_ID, pack, exc, label="Test refresh")
+        assert reg.outcomes == [(FLIGHT_ID, "abandoned", str(exc))]
+        assert not pack.exists()
+
+    def test_real_failure_closes_failed(self, flight_db, tmp_path):
+        reg = _Registry()
+        pack = _make_pack(tmp_path)
+        exc = RuntimeError("GRIB")
+        assert not gone_mod.close_failed_refresh(reg, FLIGHT_ID, pack, exc, label="Test refresh")
+        assert reg.outcomes == [(FLIGHT_ID, "failed", "GRIB")]
+        assert pack.is_dir()
+
+
 class TestPipelineStopsBeforeDigest:
     """Through the real orchestrator: once the flight is gone, the digest and
     the provisional persist never run."""

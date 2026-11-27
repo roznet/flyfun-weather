@@ -125,6 +125,31 @@ def discard_refresh_for_gone_flight(
     return True
 
 
+def close_failed_refresh(
+    registry,
+    flight_id: str,
+    pack_path: Path | str | None,
+    exc: BaseException,
+    *,
+    label: str,
+    log: logging.Logger = logger,
+) -> bool:
+    """Record a failed refresh as ``abandoned`` (flight gone) or ``failed``.
+
+    The one place the abandon-vs-fail split lives for the paths that own their
+    registry entry (queued and streaming refreshes): marks the outcome on
+    *registry* and logs at INFO or ERROR under *label* (e.g. "Streaming
+    refresh"). Returns True when the refresh was abandoned.
+    """
+    if discard_refresh_for_gone_flight(flight_id, pack_path, exc):
+        registry.mark_outcome(flight_id, "abandoned", str(exc))
+        log.info("%s abandoned for %s: %s", label, flight_id, exc)
+        return True
+    registry.mark_outcome(flight_id, "failed", str(exc))
+    log.error("%s failed for %s: %s", label, flight_id, exc, exc_info=True)
+    return False
+
+
 def _remove_pack_dir(flight_id: str, pack_path: Path | str | None) -> None:
     if not pack_path:
         return
@@ -140,7 +165,13 @@ def _remove_pack_dir(flight_id: str, pack_path: Path | str | None) -> None:
         )
         return
     try:
-        shutil.rmtree(pack_dir, ignore_errors=True)
+        # No ignore_errors: a half-removed directory is the very orphan this
+        # module exists to prevent, so a real failure must reach the warning.
+        # Already gone is fine — /move's after-commit cleanup may beat us.
+        try:
+            shutil.rmtree(pack_dir)
+        except FileNotFoundError:
+            pass
         if flight_dir.is_dir() and not any(flight_dir.iterdir()):
             flight_dir.rmdir()
     except OSError:

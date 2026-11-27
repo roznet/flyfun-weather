@@ -777,10 +777,9 @@ def _auto_refresh_one(
             # A flight moved/deleted mid-run surfaces as FlightGoneError so
             # every caller (scheduler, trip, resume) records it as abandoned
             # rather than failed; anything else propagates unchanged.
-            if isinstance(exc, FlightGoneError):
-                discard_refresh_for_gone_flight(flight_row.id, pack_path, exc)
-                raise
             if discard_refresh_for_gone_flight(flight_row.id, pack_path, exc):
+                if isinstance(exc, FlightGoneError):
+                    raise
                 raise FlightGoneError(flight_row.id) from exc
             raise
 
